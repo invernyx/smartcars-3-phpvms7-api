@@ -1,0 +1,16 @@
+{
+    "name": "SmartCARS3phpVMS7Api",
+    "alias": "smartcars3phpvms7api",
+    "description": "",
+    "keywords": [],
+    "active": 1,
+    "order": 0,
+    "providers": [
+        "Modules\\SmartCARS3phpVMS7Api\\Providers\\AppServiceProvider",
+        "Modules\\SmartCARS3phpVMS7Api\\Providers\\EventServiceProvider",
+        "Modules\\SmartCARS3phpVMS7Api\\Providers\\RouteServiceProvider"
+    ],
+    "aliases": {},
+    "files": [],
+    "requires": []
+}
