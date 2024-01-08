@@ -12,7 +12,7 @@ use \Modules\SmartCARS3phpVMS7Api\Http\Middleware\SCHeaders;
 
 Route::group(['middleware' => [SCHeaders::class]], function() {
     Route::match(['get', 'options'], '/', function () {
-        return response()->json(["apiVersion" => "0.4.4", "handler" => "phpvms7-native"]);
+        return response()->json(["apiVersion" => "0.4.4", "handler" => "phpvms7"]);
     });
     Route::match(['post', 'options'], '/pilot/login', [PilotController::class, 'login']);
     Route::match(['post', 'options'], '/pilot/resume', [PilotController::class, 'resume']);
