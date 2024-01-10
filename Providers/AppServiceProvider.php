@@ -24,10 +24,8 @@ class AppServiceProvider extends ServiceProvider
         $this->registerConfig();
         $this->registerViews();
 
-        $this->registerLinks();
-
         // Uncomment this if you have migrations
-        // $this->loadMigrationsFrom(__DIR__ . '/../$MIGRATIONS_PATH$');
+        $this->loadMigrationsFrom(__DIR__ . '/../Database/migrations');
     }
 
     /**
@@ -43,11 +41,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function registerLinks(): void
     {
-        // Show this link if logged in
-        // $this->moduleSvc->addFrontendLink('SmartCARS3phpVMS7Api', '/smartcars3phpvms7api', '', $logged_in=true);
 
-        // Admin links:
-        $this->moduleSvc->addAdminLink('SmartCARS3phpVMS7Api', '/admin/smartcars3phpvms7api');
     }
 
     /**
