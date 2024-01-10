@@ -22,7 +22,7 @@ class AppServiceProvider extends ServiceProvider
 
         $this->registerTranslations();
         $this->registerConfig();
-        $this->registerViews();
+        //$this->registerViews();
 
         // Uncomment this if you have migrations
         $this->loadMigrationsFrom(__DIR__ . '/../Database/migrations');
@@ -59,17 +59,17 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Register views.
      */
-    public function registerViews()
-    {
-        $viewPath = resource_path('views/modules/smartcars3phpvms7api');
-        $sourcePath = __DIR__.'/../Resources/views';
-
-        $this->publishes([$sourcePath => $viewPath],'views');
-
-        $this->loadViewsFrom(array_merge(array_map(function ($path) {
-            return $path . '/modules/smartcars3phpvms7api';
-        }, \Config::get('view.paths')), [$sourcePath]), 'smartcars3phpvms7api');
-    }
+//    public function registerViews()
+//    {
+//        $viewPath = resource_path('views/modules/smartcars3phpvms7api');
+//        $sourcePath = __DIR__.'/../Resources/views';
+//
+//        $this->publishes([$sourcePath => $viewPath],'views');
+//
+//        $this->loadViewsFrom(array_merge(array_map(function ($path) {
+//            return $path . '/modules/smartcars3phpvms7api';
+//        }, \Config::get('view.paths')), [$sourcePath]), 'smartcars3phpvms7api');
+//    }
 
     /**
      * Register translations.
