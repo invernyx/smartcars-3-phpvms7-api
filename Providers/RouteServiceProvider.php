@@ -40,41 +40,9 @@ class RouteServiceProvider extends ServiceProvider
      */
     public function map(Router $router)
     {
-        $this->registerWebRoutes();
-        $this->registerAdminRoutes();
         $this->registerApiRoutes();
     }
-
-    /**
-     *
-     */
-    protected function registerWebRoutes(): void
-    {
-        $config = [
-            'as'         => 'smartcars3phpvms7api.',
-            'prefix'     => 'smartcars',
-            'namespace'  => $this->namespace.'\Frontend',
-            'middleware' => ['web'],
-        ];
-
-        Route::group($config, function() {
-            $this->loadRoutesFrom(__DIR__.'/../Http/Routes/web.php');
-        });
-    }
-
-    protected function registerAdminRoutes(): void
-    {
-        $config = [
-            'as'         => 'admin.smartcars3phpvms7api.',
-            'prefix'     => 'admin/smartcars',
-            'namespace'  => $this->namespace.'\Admin',
-            'middleware' => ['web', 'role:admin'],
-        ];
-
-        Route::group($config, function() {
-            $this->loadRoutesFrom(__DIR__.'/../Http/Routes/admin.php');
-        });
-    }
+    
 
     /**
      * Register any API routes your module has. Remove this if you aren't using any
