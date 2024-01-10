@@ -36,7 +36,7 @@ class PilotController extends Controller
             'rank' => $user['rank']['name'],
             'rankImage' => null, // TODO: Add Rank Image
             'rankLevel' => 0,
-            'avatar' => $avatar, // TODO: Add Avatar URL
+            'avatar' => $user->resolveAvatarUrl(),
             'session' => $user['api_key']
         ];
     }
