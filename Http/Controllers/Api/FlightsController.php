@@ -304,20 +304,21 @@ class FlightsController extends Controller
             $flight = Flight::find($bid->flight_id);
 
             $attrs = [
-                'user_id'        => Auth::user()->id,
-                'flight_number'  => $flight->flight_number,
-                'airline_id'     => $flight->airline_id,
-                'route_code'     => $flight->route_code,
-                'route_leg'      => $flight->route_leg,
-                'flight_type'    => $flight->flight_type,
-                'dpt_airport_id' => $flight->dpt_airport_id,
-                'arr_airport_id' => $flight->arr_airport_id,
-                'aircraft_id'    => $request->input('aircraft'),
-                'flight_id'      => $flight->id,
-                'state'          => PirepState::IN_PROGRESS,
-                'status'         => $this->phaseToStatus($input['phase']),
-                'source'         => PirepSource::ACARS,
-                'source_name'    => "smartCARS 3"
+                'user_id'          => Auth::user()->id,
+                'flight_number'    => $flight->flight_number,
+                'airline_id'       => $flight->airline_id,
+                'route_code'       => $flight->route_code,
+                'route_leg'        => $flight->route_leg,
+                'flight_type'      => $flight->flight_type,
+                'dpt_airport_id'   => $flight->dpt_airport_id,
+                'arr_airport_id'   => $flight->arr_airport_id,
+                'planned_distance' => $flight->distance,
+                'aircraft_id'      => $request->input('aircraft'),
+                'flight_id'        => $flight->id,
+                'state'            => PirepState::IN_PROGRESS,
+                'status'           => $this->phaseToStatus($input['phase']),
+                'source'           => PirepSource::ACARS,
+                'source_name'      => "smartCARS 3"
             ];
             $pirep = new Pirep($attrs);
             $pirep->save();
@@ -338,7 +339,7 @@ class FlightsController extends Controller
                 'type'     => AcarsType::FLIGHT_PATH,
                 'lat'      => $input['latitude'],
                 'lon'      => $input['longitude'],
-                'distance' => $input['distanceRemaining'],
+                'distance' => $pirep->planned_distance - $input['distanceRemaining'],
                 'heading'  => $input['heading'],
                 'altitude' => $input['altitude'],
                 'gs'       => $input['groundSpeed']
