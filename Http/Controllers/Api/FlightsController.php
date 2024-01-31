@@ -339,7 +339,7 @@ class FlightsController extends Controller
                 'type'     => AcarsType::FLIGHT_PATH,
                 'lat'      => $input['latitude'],
                 'lon'      => $input['longitude'],
-                'distance' => $pirep->planned_distance - $input['distanceRemaining'],
+                'distance' => $pirep->planned_distance->local(2) - $input['distanceRemaining'],
                 'heading'  => $input['heading'],
                 'altitude' => $input['altitude'],
                 'gs'       => $input['groundSpeed']
