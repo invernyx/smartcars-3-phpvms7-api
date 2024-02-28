@@ -5,17 +5,23 @@ namespace Modules\SmartCARS3phpVMS7Api\Http\Controllers\Api;
 use App\Contracts\Controller;
 use App\Events\PirepPrefiled;
 use App\Models\Acars;
+use App\Models\Aircraft;
 use App\Models\Airport;
 use App\Models\Bid;
 use App\Models\Enums\AcarsType;
+use App\Models\Enums\FareType;
+use App\Models\Enums\FlightType;
 use App\Models\Enums\PirepSource;
 use App\Models\Enums\PirepState;
 use App\Models\Enums\PirepStatus;
+use App\Models\Fare;
 use App\Models\Flight;
 use App\Models\Pirep;
+use App\Models\PirepFare;
 use App\Models\Subfleet;
 use App\Models\User;
 use App\Services\BidService;
+use App\Services\FareService;
 use App\Services\FlightService;
 use App\Services\PirepService;
 use Carbon\Carbon;
@@ -32,7 +38,7 @@ use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
  */
 class FlightsController extends Controller
 {
-    public function __construct(public FlightService $flightService, public BidService $bidService, public PirepService $pirepService)
+    public function __construct(public FlightService $flightService, public FareService $fareService, public BidService $bidService, public PirepService $pirepService)
     {
     }
 
@@ -61,11 +67,11 @@ class FlightsController extends Controller
             //if ($bid->flight->simbrief) {
             //    $aircraft[] = $bid->flight->simbrief->aircraft->id;
             //} else {
-            //    foreach ($bid->flight->subfleets as $subfleet) {
-            //        foreach ($subfleet->aircraft as $acf) {
-            //            $aircraft[] = $acf['id'];
-            //        }
+            //foreach ($bid->flight->subfleets as $subfleet) {
+            //    foreach ($subfleet->aircraft as $acf) {
+            //        $aircraft[] = $acf['id'];
             //    }
+            //}
             //}
             $output[] = [
                 "bidID"            => $bid->id,
@@ -90,9 +96,10 @@ class FlightsController extends Controller
     }
     public function cancel(Request $request)
     {
-        $pirep = Pirep::where(['id' => $request->input('bidID')])->first();
+        $af = ActiveFlight::where('bid_id', $request->input('bidID'))->first();
+        $pirep = Pirep::find($af->pirep_id);
         $this->pirepService->cancel($pirep);
-        //$this->bidService->removeBidForPirep($pirep);
+        $af->delete();
     }
     public function charter(Request $request)
     {
@@ -168,7 +175,7 @@ class FlightsController extends Controller
         // Now the raw data
         PirepLog::create([
             'pirep_id' => $pirep->id,
-            'log' => gzencode(json_encode($input['flightData']))
+            'log'      => gzencode(json_encode($input['flightData']))
         ]);
 
         $pirep->save();
@@ -322,7 +329,7 @@ class FlightsController extends Controller
             ];
             $pirep = new Pirep($attrs);
             $pirep->save();
-
+            $this->generateFares(Aircraft::find($request->input('aircraft')), $flight, $pirep);
             event(new PirepPrefiled($pirep));
             // Add new Active Flight
             ActiveFlight::create([
@@ -386,7 +393,91 @@ class FlightsController extends Controller
                 return null;
         }
     }
-    public function flightType($type) {
+    private function generateFares($aircraft, $flight, $pirep)
+    {
+        // Figure out the proper fares to use for this flight/aircraft
+        $all_fares = $this->fareService->getFareWithOverrides($aircraft->subfleet->fares, $flight->fares);
+
+        // TODO: Reconcile the fares for this aircraft w/ proper for the flight/subfleet
+
+        // Get passenger and baggage weights with failsafe defaults
+        if ($flight->flight_type === FlightType::CHARTER_PAX_ONLY) {
+            $bag_weight = setting('simbrief.charter_baggage_weight', 28);
+        } else {
+            $bag_weight = setting('simbrief.noncharter_baggage_weight', 35);
+        }
+
+        // Get the load factors with failsafe for loadmax if nothing is defined
+        $lfactor = $flight->load_factor ?? setting('flights.default_load_factor');
+        $lfactorv = $flight->load_factor_variance ?? setting('flights.load_factor_variance');
+
+        $loadmin = $lfactor - $lfactorv;
+        $loadmin = max($loadmin, 0);
+
+        $loadmax = $lfactor + $lfactorv;
+        $loadmax = min($loadmax, 100);
+
+        if ($loadmax === 0) {
+            $loadmax = 100;
+        }
+
+        if (setting('flights.use_cargo_load_factor ', false)) {
+            $cgolfactor = $flight->load_factor ?? setting('flights.default_cargo_load_factor');
+            $cgolfactorv = $flight->load_factor_variance ?? setting('flights.cargo_load_factor_variance');
+
+            $cgoloadmin = $cgolfactor - $cgolfactorv;
+            $cgoloadmin = max($cgoloadmin, 0);
+
+            $cgoloadmax = $cgolfactor + $cgolfactorv;
+            $cgoloadmax = min($cgoloadmax, 100);
+
+            if ($cgoloadmax === 0) {
+                $cgoloadmax = 100;
+            }
+        } else {
+            $cgoloadmin = $loadmin;
+            $cgoloadmax = $loadmax;
+        }
+
+        // Load fares for passengers
+
+
+        $pax_load_sheet = [];
+        $tpaxfig = 0;
+
+        /** @var Fare $fare */
+        $fares = [];
+        foreach ($all_fares as $fare) {
+            if ($fare->type !== FareType::PASSENGER || empty($fare->capacity)) {
+                continue;
+            }
+            $fares[] = new PirepFare([
+                'fare_id' => $fare->id,
+                'count'   => floor(($fare->capacity * rand($loadmin, $loadmax)) / 100)
+            ]);
+
+        }
+
+        // Calculate total weights
+        if (setting('units.weight') === 'kg') {
+            $tbagload = round(($bag_weight * $tpaxfig) / 2.205);
+        } else {
+            $tbagload = round($bag_weight * $tpaxfig);
+        }
+        foreach ($all_fares as $fare) {
+            if ($fare->type !== FareType::CARGO || empty($fare->capacity)) {
+                continue;
+            }
+            $fares[] = new PirepFare([
+                'fare_id' => $fare->id,
+                'count'   => ceil((($fare->capacity - $tbagload) * rand($cgoloadmin, $cgoloadmax)) / 100)
+            ]);
+        }
+        // Generate PIREP fares
+        $this->fareService->saveToPirep($pirep, $fares);
+    }
+    public function flightType($type)
+    {
         switch($type) {
             case 'J':
             case 'E':
