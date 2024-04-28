@@ -247,7 +247,7 @@ class FlightsController extends Controller
                 "distance"         => $flight->distance,
                 "departureTime"    => $flight->dpt_time,
                 "arrivalTime"      => $flight->arr_time,
-                "flightTime"       => $flight->flight_time,
+                "flightTime"       => floatval(number_format($flight->flight_time / 60, 2)),
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
                 "subfleets"        => $aircraft
