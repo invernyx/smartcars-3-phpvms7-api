@@ -73,6 +73,8 @@ class FlightsController extends Controller
             //    }
             //}
             //}
+            $ft_converted = floatval(number_format($bid->flight->flight_time / 60,2));
+
             $output[] = [
                 "bidID"            => $bid->id,
                 "number"           => $bid->flight->flight_number,
@@ -81,10 +83,10 @@ class FlightsController extends Controller
                 "arrivalAirport"   => $bid->flight->arr_airport_id,
                 "route"            => null,
                 "flightLevel"      => $bid->flight->level,
-                "distance"         => $bid->flight->distance,
+                "distance"         => $bid->flight->distance->local(),
                 "departureTime"    => $bid->flight->dpt_time,
                 "arrivalTime"      => $bid->flight->arr_time,
-                "flightTime"       => $bid->flight->flight_time,
+                "flightTime"       => $ft_converted,
                 "daysOfWeek"       => $bid->flight->days,
                 "flightID"         => $bid->flight->id,
                 "type"             => $this->flightType($bid->flight->flight_type),
@@ -237,6 +239,7 @@ class FlightsController extends Controller
             foreach ($flight->subfleets as $subfleet) {
                 $aircraft[] = $subfleet->type;
             }
+            $ft_converted = floatval(number_format($flight->flight_time / 60,2));
             $output[] = [
                 "id"               => $flight->id,
                 "number"           => $flight->flight_number,
@@ -244,10 +247,10 @@ class FlightsController extends Controller
                 "departureAirport" => $flight->dpt_airport_id,
                 "arrivalAirport"   => $flight->arr_airport_id,
                 "flightLevel"      => $flight->level,
-                "distance"         => $flight->distance,
+                "distance"         => $flight->distance->local(),
                 "departureTime"    => $flight->dpt_time,
                 "arrivalTime"      => $flight->arr_time,
-                "flightTime"       => floatval(number_format($flight->flight_time / 60, 2)),
+                "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
                 "subfleets"        => $aircraft
@@ -340,6 +343,7 @@ class FlightsController extends Controller
         } else {
             $pirep = Pirep::find($af->pirep_id);
             $pirep->status = $this->phaseToStatus($input['phase']);
+            $pirep->updated_at = Carbon::now();
             $pirep->save();
             $pirep->acars()->create([
                 'status'   => $this->phaseToStatus($input['phase']),
