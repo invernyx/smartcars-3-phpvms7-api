@@ -67,15 +67,17 @@ class FlightsController extends Controller
         foreach ($bids as $bid) {
             // Aircraft Array
             $aircraft = [];
-            //if ($bid->flight->simbrief) {
-            //    $aircraft[] = $bid->flight->simbrief->aircraft->id;
-            //} else {
-            //foreach ($bid->flight->subfleets as $subfleet) {
-            //    foreach ($subfleet->aircraft as $acf) {
-            //        $aircraft[] = $acf['id'];
-            //    }
-            //}
-            //}
+            if ($bid->flight->simbrief) {
+                $aircraft = $bid->flight->simbrief->aircraft->id;
+            } elseif ($bid->aircraft_id !== null) {
+                $aircraft = $bid->aircraft_id;
+            } else {
+                foreach ($bid->flight->subfleets as $subfleet) {
+                    foreach ($subfleet->aircraft as $acf) {
+                        $aircraft[] = $acf['id'];
+                    }
+                }
+            }
             $ft_converted = floatval(number_format($bid->flight->flight_time / 60, 2));
 
             $output[] = [
@@ -87,10 +89,8 @@ class FlightsController extends Controller
                 "route"            => null,
                 "flightLevel"      => $bid->flight->level,
                 "distance"         => $bid->flight->distance->local(),
-                "distance"         => $bid->flight->distance->local(),
                 "departureTime"    => $bid->flight->dpt_time,
                 "arrivalTime"      => $bid->flight->arr_time,
-                "flightTime"       => $ft_converted,
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => $bid->flight->days,
                 "flightID"         => $bid->flight->id,
@@ -269,11 +269,10 @@ class FlightsController extends Controller
         foreach ($flights as $flight) {
             $aircraft = [];
             //dd($bid);
-            if (is_null($flight->subfleets)) {
-                continue;
-            }
             foreach ($flight->subfleets as $subfleet) {
-                $aircraft[] = $subfleet->type;
+                foreach ($subfleet->aircraft as $acf) {
+                    $aircraft[] = $acf['id'];
+                }
             }
             $ft_converted = floatval(number_format($flight->flight_time / 60, 2));
             $output[] = [
@@ -291,7 +290,7 @@ class FlightsController extends Controller
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
-                "subfleets"        => $aircraft
+                "aircraft"         => $aircraft
             ];
         }
 

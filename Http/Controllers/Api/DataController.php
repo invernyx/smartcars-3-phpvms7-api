@@ -7,6 +7,7 @@ use App\Models\Aircraft;
 use App\Models\Airport;
 use App\Models\Enums\AircraftState;
 use App\Models\Enums\AircraftStatus;
+use App\Models\Enums\FlightType;
 use App\Models\News;
 use App\Models\Subfleet;
 use Illuminate\Http\Request;
@@ -83,6 +84,10 @@ class DataController extends Controller
             'postedAt' => $news->created_at,
             'postedBy' => "Admin"
         ]);
+    }
+    public function flightTypes()
+    {
+        return response()->json(FlightType::toArray());
     }
 
 }
