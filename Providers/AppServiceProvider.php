@@ -3,6 +3,7 @@
 namespace Modules\SmartCARS3phpVMS7Api\Providers;
 
 use App\Contracts\Modules\ServiceProvider;
+use Modules\SmartCARS3phpVMS7Api\Console\RecalculatePirepDistance;
 
 /**
  * @package $NAMESPACE$
@@ -26,6 +27,10 @@ class AppServiceProvider extends ServiceProvider
 
         // Uncomment this if you have migrations
         $this->loadMigrationsFrom(__DIR__ . '/../Database/migrations');
+
+        $this->commands([
+            RecalculatePirepDistance::class
+        ]);
     }
 
     /**

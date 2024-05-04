@@ -6,6 +6,7 @@ use App\Contracts\Controller;
 use App\Events\PirepPrefiled;
 use App\Models\Acars;
 use App\Models\Aircraft;
+use App\Models\Airline;
 use App\Models\Airport;
 use App\Models\Bid;
 use App\Models\Enums\AcarsType;
@@ -32,6 +33,7 @@ use Illuminate\Support\Facades\Log;
 use Modules\SmartCARS3phpVMS7Api\Jobs\CalculatePirepDistance;
 use Modules\SmartCARS3phpVMS7Api\Models\ActiveFlight;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
+use Modules\SmartCARS3phpVMS7Api\Providers\AppServiceProvider;
 
 /**
  * class ApiController
@@ -108,27 +110,55 @@ class FlightsController extends Controller
     }
     public function charter(Request $request)
     {
+        $flight_num = $request->number;
+
+        if (is_numeric($flight_num))
+        {
+            $airline_id = env('SC3_CHARTER_AIRLINE_ID', Airline::first()->id);
+        } else {
+            $icao_iata = substr($flight_num, 0, 3);
+
+            // Check if the first 3 contains numbers. If so, the shorter IATA code was used. 3 Characters, ICAO
+            if (preg_match('~[0-9]+~', $icao_iata)) {
+                // IATA Code.
+                $query = ['iata' => substr($icao_iata, 0, 2)];
+
+            } else {
+                // ICAO Code.
+                $query = ['icao' => $icao_iata];
+            }
+            $airline = Airline::where($query)->first();
+            if ($airline == null)
+            {
+                $airline = Airline::first();
+            }
+            $airline_id = $airline->id;
+            $flight_num = filter_var($flight_num, FILTER_SANITIZE_NUMBER_INT);
+        }
+
         $attrs = [
-            'flight_number'  => $request->flight_number,
-            'airline_id'     => $request->airline_id,
-            'dpt_airport_id' => $request->dpt_airport_id,
-            'arr_airport_id' => $request->arr_airport_id,
-            'aircraft_id'    => $request->input('aircraftID'),
-            'source'         => PirepSource::ACARS,
-            'source_name'    => "smartCARS 3"
+            'flight_number'  => $flight_num,
+            'route_code'     => env('SC3_CHARTER_ROUTE_CODE', "SC3"),
+            'airline_id'     => $airline_id,
+            'flight_type'    => FlightType::CHARTER_PAX_ONLY,
+            'minutes'        => 0,
+            'hours'          => 0,
+            'active'         => true,
+            'visible'        => false,
+            'dpt_airport_id' => $request->departure,
+            'arr_airport_id' => $request->arrival,
+            'owner_type'     => AppServiceProvider::class
         ];
         // Check if the pirep already exists.
-        $existing = Pirep::where(['user_id' => $request->id, 'state' => PirepState::IN_PROGRESS])->first();
-        if (is_null($existing)) {
-            try {
-                $pirep = $this->pirepService->prefile(Auth::user(), $attrs);
-            } catch (\Exception $e) {
-                logger($e);
-                return response()->json(['message' => $e->getMessage()], 500);
-            }
-            return response()->json($pirep);
+        try {
+            $flight = $this->flightService->createFlight($attrs);
+        } catch (\Exception $exception) {
+            // Randomize the flight code
+            $attrs['route_code'] = str_random(4);
+            $flight = $this->flightService->createFlight($attrs);
         }
-        return response()->json($existing);
+        $bid = $this->bidService->addBid($flight, $request->user(), $request->aircraftID);
+        return response()->json(['bidID' => $bid->id]);
     }
     public function complete(Request $request)
     {
@@ -305,8 +335,14 @@ class FlightsController extends Controller
     {
 
         $bid = Bid::where(['user_id' => $request->get('pilotID'), 'id' => $request->post('bidID')])->first();
+        $flight = Flight::find($bid->flight_id);
+        $this->bidService->removeBid($flight, Auth::user());
 
-        $this->bidService->removeBid(Flight::find($bid->flight_id), Auth::user());
+        // If charter flight that we own, delete the flight.
+        if ($flight->owner_type == AppServiceProvider::class) {
+            $flight->delete();
+        }
+        return response()->json(['status' => 200]);
     }
     public function update(Request $request)
     {
