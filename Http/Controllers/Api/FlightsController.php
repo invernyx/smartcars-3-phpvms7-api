@@ -29,6 +29,7 @@ use GuzzleHttp\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Modules\SmartCARS3phpVMS7Api\Jobs\CalculatePirepDistance;
 use Modules\SmartCARS3phpVMS7Api\Models\ActiveFlight;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
 
@@ -73,7 +74,7 @@ class FlightsController extends Controller
             //    }
             //}
             //}
-            $ft_converted = floatval(number_format($bid->flight->flight_time / 60,2));
+            $ft_converted = floatval(number_format($bid->flight->flight_time / 60, 2));
 
             $output[] = [
                 "bidID"            => $bid->id,
@@ -84,8 +85,10 @@ class FlightsController extends Controller
                 "route"            => null,
                 "flightLevel"      => $bid->flight->level,
                 "distance"         => $bid->flight->distance->local(),
+                "distance"         => $bid->flight->distance->local(),
                 "departureTime"    => $bid->flight->dpt_time,
                 "arrivalTime"      => $bid->flight->arr_time,
+                "flightTime"       => $ft_converted,
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => $bid->flight->days,
                 "flightID"         => $bid->flight->id,
@@ -183,6 +186,9 @@ class FlightsController extends Controller
         $pirep->save();
         $this->pirepService->submit($pirep);
         ActiveFlight::where('pirep_id', $pirep->id)->delete();
+
+        CalculatePirepDistance::dispatchAfterResponse($pirep);
+
         return response()->json(['pirepID' => $pirep->id]);
 
     }
@@ -239,7 +245,7 @@ class FlightsController extends Controller
             foreach ($flight->subfleets as $subfleet) {
                 $aircraft[] = $subfleet->type;
             }
-            $ft_converted = floatval(number_format($flight->flight_time / 60,2));
+            $ft_converted = floatval(number_format($flight->flight_time / 60, 2));
             $output[] = [
                 "id"               => $flight->id,
                 "number"           => $flight->flight_number,
@@ -248,8 +254,10 @@ class FlightsController extends Controller
                 "arrivalAirport"   => $flight->arr_airport_id,
                 "flightLevel"      => $flight->level,
                 "distance"         => $flight->distance->local(),
+                "distance"         => $flight->distance->local(),
                 "departureTime"    => $flight->dpt_time,
                 "arrivalTime"      => $flight->arr_time,
+                "flightTime"       => $ft_converted,
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
@@ -343,6 +351,7 @@ class FlightsController extends Controller
         } else {
             $pirep = Pirep::find($af->pirep_id);
             $pirep->status = $this->phaseToStatus($input['phase']);
+            $pirep->updated_at = Carbon::now();
             $pirep->updated_at = Carbon::now();
             $pirep->save();
             $pirep->acars()->create([
@@ -444,7 +453,6 @@ class FlightsController extends Controller
         }
 
         // Load fares for passengers
-
 
         $pax_load_sheet = [];
         $tpaxfig = 0;
