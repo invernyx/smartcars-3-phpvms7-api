@@ -10,6 +10,7 @@ use App\Models\Airline;
 use App\Models\Airport;
 use App\Models\Bid;
 use App\Models\Enums\AcarsType;
+use App\Models\Enums\AircraftStatus;
 use App\Models\Enums\FareType;
 use App\Models\Enums\FlightType;
 use App\Models\Enums\PirepSource;
@@ -62,6 +63,7 @@ class FlightsController extends Controller
     public function bookings(Request $request)
     {
         $bids = $this->bidService->findBidsForUser(User::find($request->get('pilotID')));
+        $bids->load('flight', 'flight.subfleets', 'flight.subfleets.aircraft');
         $output = [];
 
         foreach ($bids as $bid) {
@@ -72,8 +74,8 @@ class FlightsController extends Controller
             } elseif ($bid->aircraft_id !== null) {
                 $aircraft = $bid->aircraft_id;
             } else {
-                foreach ($bid->flight->subfleets as $subfleet) {
-                    foreach ($subfleet->aircraft as $acf) {
+                foreach ($bid->flight->subfleets->sortBy('name') as $subfleet) {
+                    foreach ($subfleet->aircraft->sortBy('registration') as $acf) {
                         $aircraft[] = $acf['id'];
                     }
                 }
@@ -111,7 +113,7 @@ class FlightsController extends Controller
     public function charter(Request $request)
     {
         $flight_num = $request->number;
-
+        Log::debug($request->all());
         if (is_numeric($flight_num))
         {
             $airline_id = env('SC3_CHARTER_AIRLINE_ID', Airline::first()->id);
@@ -157,7 +159,12 @@ class FlightsController extends Controller
             $attrs['route_code'] = str_random(4);
             $flight = $this->flightService->createFlight($attrs);
         }
-        $bid = $this->bidService->addBid($flight, $request->user(), $request->aircraftID);
+        // Grab the Aircraft
+        $aircraft = Aircraft::find($request->aircraft);
+        // Assign the subfleet the aircraft is with to the flight to limit the options
+        $flight->subfleets()->attach($aircraft->subfleet);
+
+        $bid = $this->bidService->addBid($flight, $request->user(), $aircraft);
         return response()->json(['bidID' => $bid->id]);
     }
     public function complete(Request $request)
@@ -170,7 +177,7 @@ class FlightsController extends Controller
             abort(404);
         }
         $pirep = Pirep::find($af->pirep_id);
-        Log::info("Found Pirep to close out");
+        Log::debug("Found Pirep to close out");
         $pirep->status = PirepStatus::ARRIVED;
         $pirep->state = PirepState::PENDING;
         $pirep->source = PirepSource::ACARS;
@@ -270,7 +277,7 @@ class FlightsController extends Controller
             $aircraft = [];
             //dd($bid);
             foreach ($flight->subfleets as $subfleet) {
-                foreach ($subfleet->aircraft as $acf) {
+                foreach ($subfleet->aircraft()->where(['status' => AircraftStatus::ACTIVE])->get() as $acf) {
                     $aircraft[] = $acf['id'];
                 }
             }
@@ -283,10 +290,8 @@ class FlightsController extends Controller
                 "arrivalAirport"   => $flight->arr_airport_id,
                 "flightLevel"      => $flight->level,
                 "distance"         => $flight->distance->local(),
-                "distance"         => $flight->distance->local(),
                 "departureTime"    => $flight->dpt_time,
                 "arrivalTime"      => $flight->arr_time,
-                "flightTime"       => $ft_converted,
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
