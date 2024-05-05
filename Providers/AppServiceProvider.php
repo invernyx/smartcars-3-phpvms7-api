@@ -28,9 +28,6 @@ class AppServiceProvider extends ServiceProvider
         // Uncomment this if you have migrations
         $this->loadMigrationsFrom(__DIR__ . '/../Database/migrations');
 
-        $this->commands([
-            RecalculatePirepDistance::class
-        ]);
     }
 
     /**
