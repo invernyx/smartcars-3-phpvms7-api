@@ -38,15 +38,20 @@ This URL will be the "Script URL" option in smartCARS 3 Central when managing yo
 
 * Schedule Search Only Supports Departure and Arrival Airport
 * v7 Flight Type codes are simplified to v5 flight type codes in the UI. This will not affect flight logging.
-* Charter/Free Flights do not work, unless you're using a module to create the flights.
 * The following phpVMS settings are ignored
   * Bids
-    * Disable Bid On Flight
-    * Restrict Aircraft
+    * Disable Flight On Bid
   * PIREPs
-    * Restrict Aircraft To Ranks
-    * Restrict Aircraft To Type Ratings
-    * Restrict Aircraft At Departure
-  * Pilots
-    * Flights from Current
     * Restrict the flights to company
+
+## Charter Flights
+
+Unlike phpVMS 5, Charter Flights behave differently in phpVMS 7.
+
+For the callsign field, if just a number is supplied, your flight will be assigned automatically to the first airline in your system, or a airline ID you define in your .env file by using the `SC3_CHARTER_AIRLINE_ID` variable (e.g. `SC3_CHARTER_AIRLINE_ID=1` for airline id 1).
+
+If you supply a ICAO or IATA code with the flight number (e.g. `DAL1421` or `DL1421`, the API will search to see if that code exists in the system. If it finds it, the flight will be flown under that code and flight number. If it cannot find it, it'll fallback to the first airline in your system or what's set in the env variable.
+
+Only numeric flight numbers are supported. For example, `BAW47C` will turn into `BAW0` when you see the bid.
+
+If your community has the Bids > Restrict Aircraft setting enabled, the aircraft selected will be attached to the bid. However, if the setting is not enabled, the subfleet for the same aircraft family will be attached to the flight for manual selection before beginning the flight.
