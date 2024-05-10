@@ -10,6 +10,7 @@ use App\Models\Flight;
 use App\Models\Pirep;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\Log;
 use Modules\SmartCARS3phpVMS7Api\Actions\PirepDistanceCalculation;
 use Modules\SmartCARS3phpVMS7Api\Providers\AppServiceProvider;
 
@@ -38,10 +39,12 @@ class DeleteCharterFlights extends Listener
     public function handle($event)
     {
         // Calculate Pirep Distances Retroactively
+        Log::debug("smartCARS 3 Cron Event Recognized");
         $null_distance_pireps = Pirep::where(['source_name' => "smartCARS 3", 'status' => PirepStatus::ARRIVED])
             ->where('state', '!=', PirepState::IN_PROGRESS)
-            ->whereNull('distance')->get();
+            ->where('distance', '=',0.00)->get();
 
+        Log::debug("Detected ".$null_distance_pireps->count()." Null Distance Pireps");
         foreach ($null_distance_pireps as $p) {
             $p->update(['distance' => PirepDistanceCalculation::calculatePirepDistance($p)]);
         }
@@ -49,7 +52,7 @@ class DeleteCharterFlights extends Listener
         $flights = Flight::where('owner_type', AppServiceProvider::class)->get();
 
         // We're going to only delete flights that don't have a bid, or a pirep that's completed.
-        
+
         foreach ($flights as $flight) {
 
             // if Pirep is in progress, then don't do anything.
