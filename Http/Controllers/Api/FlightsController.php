@@ -31,6 +31,7 @@ use GuzzleHttp\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Modules\SmartCARS3phpVMS7Api\Actions\PirepDistanceCalculation;
 use Modules\SmartCARS3phpVMS7Api\Jobs\CalculatePirepDistance;
 use Modules\SmartCARS3phpVMS7Api\Models\ActiveFlight;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
@@ -62,7 +63,8 @@ class FlightsController extends Controller
     }
     public function bookings(Request $request)
     {
-        $bids = $this->bidService->findBidsForUser(User::find($request->get('pilotID')));
+        $user = User::find($request->get('pilotID'));
+        $bids = $this->bidService->findBidsForUser($user);
         $bids->load('flight', 'flight.subfleets', 'flight.subfleets.aircraft');
         $output = [];
 
@@ -81,6 +83,11 @@ class FlightsController extends Controller
                 }
             }
             $ft_converted = floatval(number_format($bid->flight->flight_time / 60, 2));
+
+            // If Current Airport Setting is enabled, check if person is at the correct airport before showing the bid.
+            if (setting('pilots.only_flights_from_current') && $bid->flight->dpt_airport_id !== $user->curr_airport_id) {
+                continue;
+            }
 
             $output[] = [
                 "bidID"            => $bid->id,
@@ -114,8 +121,7 @@ class FlightsController extends Controller
     {
         $flight_num = $request->number;
         Log::debug($request->all());
-        if (is_numeric($flight_num))
-        {
+        if (is_numeric($flight_num)) {
             $airline_id = env('SC3_CHARTER_AIRLINE_ID', Airline::first()->id);
         } else {
             $icao_iata = substr($flight_num, 0, 3);
@@ -130,8 +136,7 @@ class FlightsController extends Controller
                 $query = ['icao' => $icao_iata];
             }
             $airline = Airline::where($query)->first();
-            if ($airline == null)
-            {
+            if ($airline == null) {
                 $airline = Airline::first();
             }
             $airline_id = $airline->id;
@@ -219,13 +224,10 @@ class FlightsController extends Controller
             'pirep_id' => $pirep->id,
             'log'      => gzencode(json_encode($input['flightData']))
         ]);
-
+        $pirep->distance = PirepDistanceCalculation::calculatePirepDistance($pirep);
         $pirep->save();
         $this->pirepService->submit($pirep);
         ActiveFlight::where('pirep_id', $pirep->id)->delete();
-
-        CalculatePirepDistance::dispatchAfterResponse($pirep);
-
         return response()->json(['pirepID' => $pirep->id]);
 
     }
@@ -241,7 +243,10 @@ class FlightsController extends Controller
                 $query['dpt_airport_id'] = $apt->id;
             }
         }
-
+        // If Current Airport Setting is enabled, force current airport as the search
+        if (setting('pilots.only_flights_from_current')) {
+            $query['dpt_airport_id'] = $request->user()->curr_airport_id;
+        }
         if ($request->has('arrivalAirport') && $request->query('arrivalAirport') !== null) {
             $apt = Airport::where('icao', $request->query('arrivalAirport'))->first();
             if (!is_null($apt)) {
@@ -276,8 +281,9 @@ class FlightsController extends Controller
         foreach ($flights as $flight) {
             $aircraft = [];
             //dd($bid);
+            $flight = $this->flightService->filterSubfleets($request->user(), $flight);
             foreach ($flight->subfleets as $subfleet) {
-                foreach ($subfleet->aircraft()->where(['status' => AircraftStatus::ACTIVE])->get() as $acf) {
+                foreach ($subfleet->aircraft as $acf) {
                     $aircraft[] = $acf['id'];
                 }
             }
