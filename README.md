@@ -55,3 +55,11 @@ If you supply a ICAO or IATA code with the flight number (e.g. `DAL1421` or `DL1
 Only numeric flight numbers are supported. For example, `BAW47C` will turn into `BAW0` when you see the bid.
 
 If your community has the Bids > Restrict Aircraft setting enabled, the aircraft selected will be attached to the bid. However, if the setting is not enabled, the subfleet for the same aircraft family will be attached to the flight for manual selection before beginning the flight.
+
+## Pirep Distance Recalculation
+
+Included with this API is a job that'll recalculate PIREP distances for all smartCARS pireps, based on the ACARS telemetry logs on the server.
+
+To execute this, navigate directly to `/admin/smartcars/recalc` in your web browser (e.g. `https://myva.com/admin/smartcars/recalc`) to start the recalculation job.
+
+If you have a private discord notification channel setup, you will receive progress updates regarding the status of the job as it executes on the backend.
