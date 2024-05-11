@@ -38,16 +38,6 @@ class DeleteCharterFlights extends Listener
      */
     public function handle($event)
     {
-        // Calculate Pirep Distances Retroactively
-        Log::debug("smartCARS 3 Cron Event Recognized");
-        $null_distance_pireps = Pirep::where(['source_name' => "smartCARS 3", 'status' => PirepStatus::ARRIVED])
-            ->where('state', '!=', PirepState::IN_PROGRESS)
-            ->where('distance', '=',0.00)->get();
-
-        Log::debug("Detected ".$null_distance_pireps->count()." Null Distance Pireps");
-        foreach ($null_distance_pireps as $p) {
-            $p->update(['distance' => PirepDistanceCalculation::calculatePirepDistance($p)]);
-        }
         // Find all the flights
         $flights = Flight::where('owner_type', AppServiceProvider::class)->get();
 
