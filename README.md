@@ -44,6 +44,12 @@ This URL will be the "Script URL" option in smartCARS 3 Central when managing yo
   * PIREPs
     * Restrict the flights to company
 
+## phpVMS Socialite SSO Login (Discord/VATSIM)
+
+If a user creates their account on phpVMS 7 via Discord or VATSIM SSO, they do not have a typical email/password combination to properly login via smartCARS.
+
+For these accounts, the user is to use a `email/api key` (where the user will enter their email as the username, and their api key as the password) combination. The API key for the logged in user can be accessed by viewing their profile on phpVMS 7.
+
 ## Charter Flights
 
 Unlike phpVMS 5, Charter Flights behave differently in phpVMS 7.
