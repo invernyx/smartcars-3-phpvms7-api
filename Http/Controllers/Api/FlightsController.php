@@ -396,12 +396,21 @@ class FlightsController extends Controller
 
         } else {
             $pirep = Pirep::find($af->pirep_id);
-            $pirep->status = $this->phaseToStatus($input['phase']);
-            $pirep->updated_at = Carbon::now();
+            // Check if a phase has changed
+            $new_status = $this->phaseToStatus($input['phase']);
+            if ($pirep->status != $new_status) {
+                if ($pirep->status == PirepStatus::TAKEOFF && $new_status == PirepStatus::INIT_CLIM) {
+                    $pirep->block_off_time == Carbon::now();
+                }
+                if ($pirep->status == PirepStatus::LANDING && $new_status == PirepStatus::LANDED) {
+                    $pirep->block_on_time == Carbon::now();
+                }
+            }
+            $pirep->status = $new_status;
             $pirep->updated_at = Carbon::now();
             $pirep->save();
             $pirep->acars()->create([
-                'status'   => $this->phaseToStatus($input['phase']),
+                'status'   => $new_status,
                 'type'     => AcarsType::FLIGHT_PATH,
                 'lat'      => $input['latitude'],
                 'lon'      => $input['longitude'],
