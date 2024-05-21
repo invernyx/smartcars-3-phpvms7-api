@@ -5,6 +5,7 @@ namespace Modules\SmartCARS3phpVMS7Api\Providers;
 use Illuminate\Routing\Router;
 use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
 use Illuminate\Support\Facades\Route;
+use Modules\SmartCARS3phpVMS7Api\Jobs\RecalculateAllDistances;
 
 /**
  * Register the routes required for your module here
@@ -41,9 +42,21 @@ class RouteServiceProvider extends ServiceProvider
     public function map(Router $router)
     {
         $this->registerApiRoutes();
+        $this->registerAdminRoutes();
     }
-    
-
+    public function registerAdminRoutes(): void
+    {
+        Route::group([
+            'as' => 'admin.smartcars3phpvms7api',
+            'prefix' => 'admin/smartcars',
+            'middleware' => ['web', 'role:admin']
+        ], function() {
+            Route::get('recalc', function() {
+                RecalculateAllDistances::dispatch();
+                return "Pirep Calculation Job Queued. Please wait up to 10 minutes for pireps to get recalculated. If you have your private discord notification channel setup properly, you will receive notifications when this has been completed.";
+            });
+        });
+    }
     /**
      * Register any API routes your module has. Remove this if you aren't using any
      */

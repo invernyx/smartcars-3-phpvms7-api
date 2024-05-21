@@ -38,15 +38,34 @@ This URL will be the "Script URL" option in smartCARS 3 Central when managing yo
 
 * Schedule Search Only Supports Departure and Arrival Airport
 * v7 Flight Type codes are simplified to v5 flight type codes in the UI. This will not affect flight logging.
-* Charter/Free Flights do not work, unless you're using a module to create the flights.
 * The following phpVMS settings are ignored
   * Bids
-    * Disable Bid On Flight
-    * Restrict Aircraft
+    * Disable Flight On Bid
   * PIREPs
-    * Restrict Aircraft To Ranks
-    * Restrict Aircraft To Type Ratings
-    * Restrict Aircraft At Departure
-  * Pilots
-    * Flights from Current
     * Restrict the flights to company
+
+## phpVMS Socialite SSO Login (Discord/VATSIM)
+
+If a user creates their account on phpVMS 7 via Discord or VATSIM SSO, they do not have a typical email/password combination to properly login via smartCARS.
+
+For these accounts, the user is to use a `email/api key` (where the user will enter their email as the username, and their api key as the password) combination. The API key for the logged in user can be accessed by viewing their profile on phpVMS 7.
+
+## Charter Flights
+
+Unlike phpVMS 5, Charter Flights behave differently in phpVMS 7.
+
+For the callsign field, if just a number is supplied, your flight will be assigned automatically to the first airline in your system, or a airline ID you define in your .env file by using the `SC3_CHARTER_AIRLINE_ID` variable (e.g. `SC3_CHARTER_AIRLINE_ID=1` for airline id 1).
+
+If you supply a ICAO or IATA code with the flight number (e.g. `DAL1421` or `DL1421`, the API will search to see if that code exists in the system. If it finds it, the flight will be flown under that code and flight number. If it cannot find it, it'll fallback to the first airline in your system or what's set in the env variable.
+
+Only numeric flight numbers are supported. For example, `BAW47C` will turn into `BAW0` when you see the bid.
+
+If your community has the Bids > Restrict Aircraft setting enabled, the aircraft selected will be attached to the bid. However, if the setting is not enabled, the subfleet for the same aircraft family will be attached to the flight for manual selection before beginning the flight.
+
+## Pirep Distance Recalculation
+
+Included with this API is a job that'll recalculate PIREP distances for all smartCARS pireps, based on the ACARS telemetry logs on the server.
+
+To execute this, navigate directly to `/admin/smartcars/recalc` in your web browser (e.g. `https://myva.com/admin/smartcars/recalc`) to start the recalculation job.
+
+If you have a private discord notification channel setup, you will receive progress updates regarding the status of the job as it executes on the backend.

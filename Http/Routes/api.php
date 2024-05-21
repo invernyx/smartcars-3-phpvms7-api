@@ -12,7 +12,7 @@ use \Modules\SmartCARS3phpVMS7Api\Http\Middleware\SCHeaders;
 
 Route::group(['middleware' => [SCHeaders::class]], function() {
     Route::match(['get', 'options'], '/', function () {
-        return response()->json(["apiVersion" => "0.4.3", "handler" => "phpvms7"]);
+        return response()->json(["apiVersion" => "0.5.0", "handler" => "phpvms7"]);
     });
     Route::match(['post', 'options'], '/pilot/login', [PilotController::class, 'login']);
     Route::match(['post', 'options'], '/pilot/resume', [PilotController::class, 'resume']);
@@ -24,6 +24,7 @@ Route::group(['middleware' => [SCHeaders::class]], function() {
             Route::match(['get', 'options', 'post'], '/airports', 'airports');
             Route::match(['get', 'options'], '/subfleets', 'subfleets');
             Route::match(['get', 'options'], '/news', 'news');
+            Route::match(['get', 'options'], '/flight_types', 'flightTypes');
         });
         Route::group(['prefix' => '/pireps', 'controller' => PirepsController::class], function () {
             Route::match(['get', 'options', 'post'], '/details', 'details');
