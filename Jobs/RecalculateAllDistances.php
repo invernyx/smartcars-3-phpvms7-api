@@ -3,6 +3,7 @@
 namespace Modules\SmartCARS3phpVMS7Api\Jobs;
 
 use App\Models\Enums\PirepState;
+use App\Models\Enums\PirepStatus;
 use App\Models\Pirep;
 use App\Notifications\Channels\Discord\DiscordMessage;
 use GuzzleHttp\Client;
@@ -51,8 +52,31 @@ class RecalculateAllDistances implements ShouldQueue
         $null_distance_pireps = Pirep::where(['source_name' => "smartCARS 3"])->get();
 
         Log::debug("Detected ".$null_distance_pireps->count()." Null Distance Pireps");
+
+        if (setting('notifications.discord_private_webhook_url') !== "") {
+            $client->request('POST', setting('notifications.discord_private_webhook_url'), [
+                'form_params' => [
+                    'content' => "Recalculating: ".$null_distance_pireps->count()." PIREPs"
+                ]
+            ]);
+        }
+        $progress = 0;
         foreach ($null_distance_pireps as $p) {
-            $p->update(['distance' => PirepDistanceCalculation::calculatePirepDistance($p)]);
+            if (is_int($progress/500)) {
+                if (setting('notifications.discord_private_webhook_url') !== "") {
+                    $client->request('POST', setting('notifications.discord_private_webhook_url'), [
+                        'form_params' => [
+                            'content' => "Currently at ".$progress
+                        ]
+                    ]);
+                }
+            }
+            $p->update([
+                'distance'       => PirepDistanceCalculation::calculatePirepDistance($p),
+                //'block_off_time' => optional($p->acars()->where('status', PirepStatus::INIT_CLIM)->first())->created_at,
+                //'block_on_time'  => optional($p->acars()->where('status', PirepStatus::LANDED)->first())->created_at
+                ]);
+            $progress++;
         }
         if (setting('notifications.discord_private_webhook_url') !== "") {
             $client->request('POST', setting('notifications.discord_private_webhook_url'), [
