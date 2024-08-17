@@ -154,7 +154,8 @@ class FlightsController extends Controller
             'visible'        => false,
             'dpt_airport_id' => $request->departure,
             'arr_airport_id' => $request->arrival,
-            'owner_type'     => AppServiceProvider::class
+            'owner_type'     => AppServiceProvider::class,
+            'user_id'        => Auth::user()->id
         ];
         // Check if the pirep already exists.
         try {
