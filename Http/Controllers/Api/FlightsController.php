@@ -238,6 +238,13 @@ class FlightsController extends Controller
 
         $query = [];
         $subfleet = null;
+        $limit = 100;
+
+        if ($request->has('limit') && $request->query('limit') !== null) {
+            $limit = $request->query('limit');
+            $limit = min($limit, 100);
+        }
+
         if ($request->has('departureAirport') && $request->query('departureAirport') !== null) {
             $apt = Airport::where('icao', $request->query('departureAirport'))->first();
             if (!is_null($apt)) {
@@ -273,9 +280,9 @@ class FlightsController extends Controller
             }
         } else {
             if (empty($query)) {
-                $flights = Flight::with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take(100)->get();
+                $flights = Flight::with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take($limit)->get();
             } else {
-                $flights = Flight::where($query)->with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take(100)->get();
+                $flights = Flight::where($query)->with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take($limit)->get();
             }
         }
 
