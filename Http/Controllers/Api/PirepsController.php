@@ -95,8 +95,7 @@ class PirepsController extends Controller
     public function latest(Request $request)
     {
         $user = User::find($request->get('pilotID'));
-        $user->load('pireps', 'pireps.airline');
-        $pirep = $user->pireps->sortByDesc('created_at')->first();
+        $pirep = $user->latest_pirep;
 
         return response()->json([
             'id' => $pirep->id,
