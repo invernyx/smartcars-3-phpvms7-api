@@ -29,6 +29,7 @@ Route::group(['middleware' => [SCHeaders::class]], function() {
         Route::group(['prefix' => '/pireps', 'controller' => PirepsController::class], function () {
             Route::match(['get', 'options', 'post'], '/details', 'details');
             Route::match(['get', 'options', 'post'], '/search', 'search');
+            Route::match(['get', 'options', 'post'], '/latest', 'latest');
         });
         Route::group(['prefix' => '/flights', 'controller' => FlightsController::class], function () {
             Route::match(['post', 'options'], '/book', 'book');

@@ -53,7 +53,7 @@ class PirepsController extends Controller
     }
 
     /**
-     * Handles /hello
+     * Handles /search
      *
      * @param Request $request
      *
@@ -84,6 +84,37 @@ class PirepsController extends Controller
         }
         return response()->json($output_pireps);
     }
+
+    /**
+     * Handles /latest
+     *
+     * @param Request $request
+     *
+     * @return mixed
+     */
+    public function latest(Request $request)
+    {
+        $user = $user = Auth::user();
+        $pirep = $user->latest_pirep;
+
+        return response()->json([
+            'id' => $pirep->id,
+            'submitDate' => Carbon::createFromTimeString($pirep->submitted_at)->toDateString(),
+            'airlineCode' => $pirep->airline->icao,
+            'route' => [],
+            'number' => $pirep->flight_number,
+            'distance' => $pirep->planned_distance->getResponseUnits()['mi'],
+            'flightType' => $pirep->flight_type,
+            'departureAirport' => $pirep->dpt_airport_id,
+            'arrivalAirport' => $pirep->arr_airport_id,
+            'aircraft' => $pirep->aircraft_id,
+            'status' => self::getStatus($pirep->state),
+            'flightTime' => $pirep->flight_time / 60,
+            'landingRate' => $pirep->landing_rate,
+            'fuelUsed' => $pirep->fuel_used->getResponseUnits()['lbs']
+        ]);
+    }
+
     function getStatus($value) {
         switch(intval($value)) {
             case 1:
