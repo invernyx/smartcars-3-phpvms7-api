@@ -94,7 +94,7 @@ class PirepsController extends Controller
      */
     public function latest(Request $request)
     {
-        $user = User::find($request->get('pilotID'));
+        $user = $user = Auth::user();
         $pirep = $user->latest_pirep;
 
         return response()->json([
