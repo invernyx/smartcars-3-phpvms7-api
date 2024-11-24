@@ -28,7 +28,7 @@ class DataController extends Controller
     public function aircraft(Request $request)
     {
 
-        $aircraft = Aircraft::all();
+        $aircraft = Aircraft::orderBy('name')->get();
         $output = [];
         foreach ($aircraft as $item) {
             $state = "";
