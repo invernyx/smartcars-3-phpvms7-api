@@ -409,6 +409,14 @@ class FlightsController extends Controller
             }
             $pirep->status = $new_status;
             $pirep->updated_at = Carbon::now();
+            
+            // Get current flight time by checking time since first ACARS telemetry report.
+            $first_acars = $pirep->acars()->first();
+            if ($first_acars !== null)
+            {
+                $minutes = Carbon::now()->diffInMinutes($first_acars->created_at);
+                $pirep->flight_time = $minutes;
+            }
             $pirep->save();
             $pirep->acars()->create([
                 'status'   => $new_status,
