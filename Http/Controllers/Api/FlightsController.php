@@ -154,7 +154,8 @@ class FlightsController extends Controller
             'visible'        => false,
             'dpt_airport_id' => $request->departure,
             'arr_airport_id' => $request->arrival,
-            'owner_type'     => AppServiceProvider::class
+            'owner_type'     => AppServiceProvider::class,
+            'user_id'        => Auth::user()->id
         ];
         // Check if the pirep already exists.
         try {
@@ -237,6 +238,13 @@ class FlightsController extends Controller
 
         $query = [];
         $subfleet = null;
+        $limit = 100;
+
+        if ($request->has('limit') && $request->query('limit') !== null) {
+            $limit = $request->query('limit');
+            $limit = min($limit, 100);
+        }
+
         if ($request->has('departureAirport') && $request->query('departureAirport') !== null) {
             $apt = Airport::where('icao', $request->query('departureAirport'))->first();
             if (!is_null($apt)) {
@@ -272,9 +280,9 @@ class FlightsController extends Controller
             }
         } else {
             if (empty($query)) {
-                $flights = Flight::with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take(100)->get();
+                $flights = Flight::with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take($limit)->get();
             } else {
-                $flights = Flight::where($query)->with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take(100)->get();
+                $flights = Flight::where($query)->with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take($limit)->get();
             }
         }
 
@@ -408,6 +416,14 @@ class FlightsController extends Controller
             }
             $pirep->status = $new_status;
             $pirep->updated_at = Carbon::now();
+            
+            // Get current flight time by checking time since first ACARS telemetry report.
+            $first_acars = $pirep->acars()->first();
+            if ($first_acars !== null)
+            {
+                $minutes = Carbon::now()->diffInMinutes($first_acars->created_at);
+                $pirep->flight_time = $minutes;
+            }
             $pirep->save();
             $pirep->acars()->create([
                 'status'   => $new_status,
