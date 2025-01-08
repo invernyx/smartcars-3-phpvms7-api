@@ -1,7 +1,7 @@
 {
     "openapi": "3.1.0",
     "info": {
-        "version": "0.4.4",
+        "version": "0.5.1",
         "title": "smartCARS 3 Public API"
     },
     "paths": {
@@ -1428,6 +1428,119 @@
                                                 "format": "float",
                                                 "minimum": 0
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/pireps/latest": {
+            "get": {
+                "summary": "Get the latest PIREP",
+                "description": "Get the latest pirep for a given user",
+                "responses": {
+                    "200": {
+                        "description": "200 - Return a list of PIREPs",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "id",
+                                        "submitDate",
+                                        "airlineCode",
+                                        "number",
+                                        "route",
+                                        "distance",
+                                        "flightType",
+                                        "departureAirport",
+                                        "arrivalAirport",
+                                        "aircraft",
+                                        "status",
+                                        "flightTime",
+                                        "landingRate",
+                                        "fuelUsed"
+                                    ],
+                                    "properties": {
+                                        "id": {
+                                            "type": "integer",
+                                            "format": "int32",
+                                            "minimum": 0
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "pattern": "^Accepted|Pending|Rejected$"
+                                        },
+                                        "submitDate": {
+                                            "type": "string",
+                                            "format": "date-time"
+                                        },
+                                        "airlineCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z]{3}$"
+                                        },
+                                        "number": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z0-9]{1,}$"
+                                        },
+                                        "route": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string",
+                                                "pattern": "^((0?[1-9]|[1-2]\\d|3[0-6])[LCR]?)|([A-Z]{5})|([A-Z]{3})|([A-Z]{1-3})$"
+                                            }
+                                        },
+                                        "distance": {
+                                            "type": "number",
+                                            "format": "float"
+                                        },
+                                        "flightType": {
+                                            "type": "string",
+                                            "enum": [
+                                                "C",
+                                                "P"
+                                            ]
+                                        },
+                                        "departureAirport": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z]{4}$"
+                                        },
+                                        "arrivalAirport": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z]{4}$"
+                                        },
+                                        "aircraft": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z]{1}[A-Z0-9]{1,3}$",
+                                            "nullable": true
+                                        },
+                                        "flightTime": {
+                                            "type": "number",
+                                            "format": "float",
+                                            "minimum": 0
+                                        },
+                                        "landingRate": {
+                                            "type": "number",
+                                            "format": "float"
+                                        },
+                                        "fuelUsed": {
+                                            "type": "number",
+                                            "format": "float",
+                                            "minimum": 0
                                         }
                                     }
                                 }
