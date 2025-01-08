@@ -1454,7 +1454,7 @@
                 "description": "Get the latest pirep for a given user",
                 "responses": {
                     "200": {
-                        "description": "200 - Return a list of PIREPs",
+                        "description": "200 - Return the latest PIREPs",
                         "content": {
                             "application/json": {
                                 "schema": {
