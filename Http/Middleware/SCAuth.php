@@ -26,12 +26,10 @@ class SCAuth
         $token = $request->bearerToken();
 
         $model = User::where('api_key', $token)->first();
-        Log::debug('SC3: Auth Called. API key');
         //dd($model);
         if (!is_null($model))
         {
             Auth::setUser($model);
-            Log::debug('SC3: Auth Success');
             $request->attributes->add(['pilotID' => $model->id]);
             return $next($request);
         }
