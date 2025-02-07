@@ -192,7 +192,16 @@ class FlightsController extends Controller
         $input = $request->all();
         logger($input);
         //dd($request);
-        $pirep = Pirep::find($input['uuid']);
+        if (isset($input['uuid']))
+        {
+            $pirep = Pirep::find($input['uuid']);
+        }
+        else
+        {
+            $af = ActiveFlight::where('bid_id', $input['bidID'])->first();
+            $pirep = Pirep::find($af->pirep_id);
+        }
+
         Log::debug("Found Pirep to close out");
         $pirep->status = PirepStatus::ARRIVED;
         $pirep->state = PirepState::PENDING;
@@ -237,6 +246,7 @@ class FlightsController extends Controller
         ]);
         $pirep->distance = PirepDistanceCalculation::calculatePirepDistance($pirep);
         $pirep->save();
+        ActiveFlight::where('pirep_id', $pirep->id)->delete();
         $this->pirepService->submit($pirep);
         return response()->json(['pirepID' => $pirep->id]);
 
@@ -376,6 +386,46 @@ class FlightsController extends Controller
         $input = $request->all();
         // Check if there's an active flight under that bid.
         $pirep = Pirep::find($input['uuid']);
+        // if no pirep, check against the bid
+        if ($pirep === null) {
+            $af = ActiveFlight::where('bid_id', $input['bidID'])->first();
+            $pirep = Pirep::find($af->pirep_id);
+        }
+        // If no pirep, then create a new one
+        if ($pirep === null) {
+            $bid = Bid::find($request->input('bidID'));
+            logger($request->all());
+            $flight = Flight::find($bid->flight_id);
+
+            $attrs = [
+                'user_id'          => Auth::user()->id,
+                'flight_number'    => $flight->flight_number,
+                'airline_id'       => $flight->airline_id,
+                'route_code'       => $flight->route_code,
+                'route_leg'        => $flight->route_leg,
+                'flight_type'      => $flight->flight_type,
+                'dpt_airport_id'   => $flight->dpt_airport_id,
+                'arr_airport_id'   => $flight->arr_airport_id,
+                'planned_distance' => $flight->distance,
+                'aircraft_id'      => $request->input('aircraft'),
+                'flight_id'        => $flight->id,
+                'state'            => PirepState::IN_PROGRESS,
+                'status'           => $this->phaseToStatus($input['phase']),
+                'source'           => PirepSource::ACARS,
+                'source_name'      => "smartCARS 3"
+            ];
+            $pirep = new Pirep($attrs);
+            $pirep->save();
+            $this->generateFares(Aircraft::find($request->input('aircraft')), $flight, $pirep);
+            event(new PirepPrefiled($pirep));
+            // Add new Active Flight
+            ActiveFlight::create([
+                'bid_id'   => $input['bidID'],
+                'pirep_id' => $pirep->id
+            ]);
+            return;
+        }
+
         // Check if a phase has changed
         $new_status = $this->phaseToStatus($input['phase']);
         if ($pirep->status != $new_status) {
@@ -407,6 +457,11 @@ class FlightsController extends Controller
             'altitude' => $input['altitude'],
             'gs'       => $input['groundSpeed']
         ]);
+    }
+
+    private function handleLegacyCreateFlight()
+    {
+
     }
 
     public function phaseToStatus(string $phase)
