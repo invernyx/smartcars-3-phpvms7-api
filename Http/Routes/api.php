@@ -33,11 +33,12 @@ Route::group(['middleware' => [SCHeaders::class]], function() {
         });
         Route::group(['prefix' => '/flights', 'controller' => FlightsController::class], function () {
             Route::match(['post', 'options'], '/book', 'book');
+            Route::match(['post', 'options'], '/rebook', 'rebook');
             Route::match(['get', 'options'], '/bookings', 'bookings');
             Route::match(['post', 'options'], '/charter', 'charter');
             Route::match(['post', 'options'], '/complete', 'complete');
             Route::match(['post', 'options'], '/cancel', 'cancel');
-            Route::match(['post', 'options'], '/prefile', 'prefile');
+            Route::match(['post', 'options'], '/start', 'start');
             Route::match(['get', 'options'], '/search', 'search');
             Route::match(['post', 'options'], '/unbook', 'unbook');
             Route::match(['post', 'options'], '/update', 'update');
