@@ -61,10 +61,12 @@ class FlightsController extends Controller
         $flight = Flight::find($request->input('flightID'));
         $user = User::find($request->get('pilotID'));
         $bid = $this->bidService->addBid($flight, $user);
-        $bid = Bid::find($bid->id);
         // force setting the aircraft selected for smartCARS bidding
-        $bid->aircraft_id = $request->input('aircraftID');
-        $bid->save();
+        if ($request->input('aircraftID') !== null) {
+            $bid = Bid::find($bid->id);
+            $bid->aircraft_id = $request->input('aircraftID');
+            $bid->save();
+        }
         return response()->json(["bidID" => $bid->id]);
     }
     public function rebook(Request $request)
@@ -185,6 +187,7 @@ class FlightsController extends Controller
         $flight->subfleets()->attach($aircraft->subfleet);
 
         $bid = $this->bidService->addBid($flight, $request->user(), $aircraft);
+
         return response()->json(['bidID' => $bid->id]);
     }
     public function complete(Request $request)
