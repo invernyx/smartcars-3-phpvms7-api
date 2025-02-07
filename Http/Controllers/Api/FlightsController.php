@@ -187,7 +187,9 @@ class FlightsController extends Controller
         $flight->subfleets()->attach($aircraft->subfleet);
 
         $bid = $this->bidService->addBid($flight, $request->user(), $aircraft);
-
+        $bid = Bid::find($bid->id);
+        $bid->aircraft_id = $request->input('aircraftID');
+        $bid->save();
         return response()->json(['bidID' => $bid->id]);
     }
     public function complete(Request $request)
