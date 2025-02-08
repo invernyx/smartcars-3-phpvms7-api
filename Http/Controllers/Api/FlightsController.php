@@ -288,8 +288,6 @@ class FlightsController extends Controller
 
         foreach ($flights as $flight) {
             $aircraft = [];
-            //dd($bid);
-            $flight = $this->flightService->filterSubfleets($request->user(), $flight);
             foreach ($flight->subfleets as $subfleet) {
                 foreach ($subfleet->aircraft as $acf) {
                     $aircraft[] = $acf['id'];
@@ -309,7 +307,8 @@ class FlightsController extends Controller
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
-                "aircraft"         => $aircraft
+                "aircraft"         => sizeof($aircraft) === 1 ? $aircraft[0] : $aircraft,
+                "notes"            => $flight->notes
             ];
         }
 
