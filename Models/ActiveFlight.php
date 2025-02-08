@@ -18,7 +18,7 @@ class ActiveFlight extends Model
         return $this->belongsTo(Bid::class);
     }
     public function pirep() {
-        return $this->belongsTo(Pirep::class);
+        return $this->belongsTo(Pirep::class)->withTrashed();
     }
     public $timestamps = false;
 }
