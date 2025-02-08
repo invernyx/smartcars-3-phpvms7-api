@@ -10,6 +10,9 @@ use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Auth;
 
 /**
  * class ApiController
@@ -49,9 +52,7 @@ class PirepsController extends Controller
             'locationData' => $pirep->acars->map(function ($a) {return ['latitude' => $a->lat, 'longitude' => $a->lon, 'heading' => $a->heading];}),
             'flightData' => $flightData
         ]);
-
     }
-
     /**
      * Handles /search
      *
@@ -96,6 +97,10 @@ class PirepsController extends Controller
     {
         $user = $user = Auth::user();
         $pirep = $user->latest_pirep;
+
+        if ($pirep == null) {
+            return response()->json([], 404);
+        }
 
         return response()->json([
             'id' => $pirep->id,
