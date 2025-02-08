@@ -10,6 +10,8 @@ use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * class ApiController
@@ -32,9 +34,24 @@ class PirepsController extends Controller
         $pirep = Pirep::find($pirepID);
         $pirep->load('comments', 'acars_logs', 'acars');
 
+        return response()->json([
+            'flightLog' => $pirep->comments->map(function ($a ) { return $a->comment;}),
+            'locationData' => $this->getLocationData($pirep, $user_id),
+            'flightData' => $this->getFlightData($pirep, $user_id)
+        ]);
+    }
+
+    private function getFlightData($pirep, $user_id) {
+        if (Schema::hasTable('smartCARS3_FlightData')) {
+            $flightData = DB::table("smartCARS3_FlightData")->select('log')->where('pilotID', $user_id)->where('pirepID', $pirep->id)->get();
+            if (count($flightData) > 0) {
+                return json_decode(gzdecode($flightData[0]->log));
+            }
+        }
+        $pirep->load('comments', 'acars_logs', 'acars');
+
         $flightData = [];
         $i = 0;
-
         foreach ($pirep->acars_logs->sortBy('created_at') as $acars_log) {
             $flightData[] = [
                 'eventId' => $acars_log->id,
@@ -44,12 +61,27 @@ class PirepsController extends Controller
                 'message' => $acars_log->log
             ];
         }
-        return response()->json([
-            'flightLog' => $pirep->comments->map(function ($a ) { return $a->comment;}),
-            'locationData' => $pirep->acars->map(function ($a) {return ['latitude' => $a->lat, 'longitude' => $a->lon, 'heading' => $a->heading];}),
-            'flightData' => $flightData
-        ]);
+        return $flightData;
+    }
 
+    private function getLocationData($pirep, $user_id) {
+        if (Schema::hasTable('smartCARS3_FlightData')) {
+            $flightData = DB::table("smartCARS3_FlightData")->select('locations')->where('pilotID', $user_id)->where('pirepID', $pirep->id)->get();
+            if (count($flightData) > 0) {
+                return json_decode(gzdecode($flightData[0]->locations));
+            }
+        }
+        $pirep->load('comments', 'acars_logs', 'acars');
+
+        $locationData = [];
+        foreach ($pirep->acars->sortBy('created_at') as $acars) {
+            $locationData[] = [
+                'latitude' => $acars->lat,
+                'longitude' => $acars->lon,
+                'heading' => $acars->heading
+            ];
+        }
+        return $locationData;
     }
 
     /**
