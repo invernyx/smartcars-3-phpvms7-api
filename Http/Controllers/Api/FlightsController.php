@@ -104,7 +104,8 @@ class FlightsController extends Controller
                 "daysOfWeek"       => $bid->flight->days,
                 "flightID"         => $bid->flight->id,
                 "type"             => $this->flightType($bid->flight->flight_type),
-                "aircraft"         => $aircraft
+                "aircraft"         => $aircraft,
+                "notes"            => $bid->flight->notes
             ];
         }
 
@@ -309,7 +310,8 @@ class FlightsController extends Controller
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
-                "aircraft"         => $aircraft
+                "aircraft"         => $aircraft,
+                "notes"            => $flight->notes
             ];
         }
 
