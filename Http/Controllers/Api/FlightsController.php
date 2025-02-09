@@ -191,6 +191,7 @@ class FlightsController extends Controller
         $pirep->landing_rate = $input['landingRate'];
         $pirep->fuel_used = $input['fuelUsed'];
         $pirep->flight_time = $input['flightTime'] * 60;
+        $pirep->route = $input['route'];
         $pirep->submitted_at = Carbon::now('UTC');
 
         if (gettype($input['flightLog']) === "string") {

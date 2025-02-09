@@ -4,14 +4,13 @@ namespace Modules\SmartCARS3phpVMS7Api\Http\Controllers\Api;
 
 use App\Contracts\Controller;
 use App\Models\Enums\PirepState;
+use App\Models\Acars;
 use App\Models\Pirep;
 use App\Models\PirepComment;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -68,9 +67,9 @@ class PirepsController extends Controller
         foreach ($user->pireps->sortByDesc('created_at') as $pirep) {
             $output_pireps[] = [
                 'id' => $pirep->id,
-                'submitDate' => Carbon::createFromTimeString($pirep->submitted_at)->toDateString(),
+                'submitDate' => Carbon::createFromTimeString($pirep->submitted_at)->toDateTimeString(),
                 'airlineCode' => $pirep->airline->icao,
-                'route' => [],
+                'route' => $pirep->route ? $pirep->route : '',
                 'number' => $pirep->flight_number,
                 'distance' => $pirep->planned_distance->getResponseUnits()['mi'],
                 'flightType' => $pirep->flight_type,
@@ -96,17 +95,17 @@ class PirepsController extends Controller
     public function latest(Request $request)
     {
         $user = $user = Auth::user();
-        $pirep = $user->latest_pirep;
+        $pirep = Pirep::where('user_id', $user->id)->orderBy('created_at', 'desc')->first();
 
-        if ($pirep == null) {
-            return response()->json([], 404);
+        if (!$pirep) {
+            return response()->json([]);
         }
 
         return response()->json([
             'id' => $pirep->id,
             'submitDate' => Carbon::createFromTimeString($pirep->submitted_at)->toDateString(),
             'airlineCode' => $pirep->airline->icao,
-            'route' => [],
+            'route' => $pirep->route ? $pirep->route : '',
             'number' => $pirep->flight_number,
             'distance' => $pirep->planned_distance->getResponseUnits()['mi'],
             'flightType' => $pirep->flight_type,
