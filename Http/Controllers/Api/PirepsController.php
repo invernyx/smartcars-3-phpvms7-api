@@ -32,24 +32,11 @@ class PirepsController extends Controller
         $user_id = $request->get('pilotID');
 
         $pirep = Pirep::find($pirepID);
-        $pirep->load('comments', 'acars_logs', 'acars');
+        $pirep->load('comments', 'acars');
 
-        $flightData = [];
-        $i = 0;
-
-        foreach ($pirep->acars_logs->sortBy('created_at') as $acars_log) {
-            $flightData[] = [
-                'eventId' => $acars_log->id,
-                'eventTimestamp' => $acars_log->created_at,
-                'eventElapsedTime' => $i,
-                'eventCondition' => null,
-                'message' => $acars_log->log
-            ];
-        }
         return response()->json([
-            'flightLog' => $pirep->comments->map(function ($a ) { return $a->comment;}),
             'locationData' => $pirep->acars->map(function ($a) {return ['latitude' => $a->lat, 'longitude' => $a->lon, 'heading' => $a->heading];}),
-            'flightData' => $flightData
+            'flightData' => array_reverse($pirep->comments->map(function ($a ) { return ['eventId' => $a->id, 'eventTimestamp' => $a->created_at, 'eventElapsedTime' => 0, 'eventCondition' => null, 'message' => $a->comment];})->toArray()),
         ]);
     }
     /**
