@@ -104,7 +104,8 @@ class FlightsController extends Controller
                 "daysOfWeek"       => $bid->flight->days,
                 "flightID"         => $bid->flight->id,
                 "type"             => $this->flightType($bid->flight->flight_type),
-                "aircraft"         => $aircraft
+                "aircraft"         => $aircraft,
+                "notes"            => $bid->flight->notes
             ];
         }
 
@@ -191,6 +192,7 @@ class FlightsController extends Controller
         $pirep->landing_rate = $input['landingRate'];
         $pirep->fuel_used = $input['fuelUsed'];
         $pirep->flight_time = $input['flightTime'] * 60;
+        $pirep->route = $input['route'] ? join(" ", $input['route']) : '';
         $pirep->submitted_at = Carbon::now('UTC');
 
         if (gettype($input['flightLog']) === "string") {
@@ -288,7 +290,6 @@ class FlightsController extends Controller
 
         foreach ($flights as $flight) {
             $aircraft = [];
-            //dd($bid);
             $flight = $this->flightService->filterSubfleets($request->user(), $flight);
             foreach ($flight->subfleets as $subfleet) {
                 foreach ($subfleet->aircraft as $acf) {
@@ -309,7 +310,8 @@ class FlightsController extends Controller
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
-                "aircraft"         => $aircraft
+                "aircraft"         => sizeof($aircraft) === 1 ? $aircraft[0] : $aircraft,
+                "notes"            => $flight->notes
             ];
         }
 
