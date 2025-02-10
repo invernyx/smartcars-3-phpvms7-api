@@ -1,7 +1,12 @@
 {
     "name": "SmartCARS3phpVMS7Api",
     "alias": "smartcars3phpvms7api",
-    "description": "",
+    "version": "0.6.0",
+    "description": "The officially supported API for running smartCARS 3 with phpVMS 7.x.x",
+    "attribution": {
+        "text": "Invernyx inc. d.b.a. TFDi Design",
+        "url": "https://tfdidesign.com"
+    },
     "keywords": [],
     "active": 1,
     "order": 0,
