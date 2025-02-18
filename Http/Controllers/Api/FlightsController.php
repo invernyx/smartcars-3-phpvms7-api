@@ -347,6 +347,16 @@ class FlightsController extends Controller
         $bid = Bid::find($request->input('bidID'));
         logger($request->all());
         $flight = Flight::find($bid->flight_id);
+        $aircraft = null;
+        if ($bid->flight->simbrief) {
+            $aircraft = $bid->flight->simbrief->aircraft->id;
+        } elseif ($bid->aircraft_id !== null) {
+            $aircraft = $bid->aircraft_id;
+        } else {
+            // if no aircraft is available, return a 500 error saying no aircraft is attached to the bid
+            return response()->json(['message' => 'No aircraft attached to bid'], 500);
+        }
+
         $attrs = [
             'flight_number'  => $flight->flight_number,
             'airline_id'     => $flight->airline_id,
@@ -355,19 +365,24 @@ class FlightsController extends Controller
             'flight_type'    => $flight->flight_type,
             'dpt_airport_id' => $flight->dpt_airport_id,
             'arr_airport_id' => $flight->arr_airport_id,
-            'aircraft_id'    => $bid->aircraft_id,
+            'aircraft_id'    => $aircraft,
             'flight_id'      => $flight->id,
             'source'         => PirepSource::ACARS,
             'source_name'    => "smartCARS 3"
         ];
-        // Check if the pirep already exists.
-        //$existing = Pirep::where(['user_id' => $user->id, 'state' => PirepState::IN_PROGRESS])->first();
-        //if (is_null($existing)) {
+        // find if there's a SimBrief OFP for this flight and user. If so, add it to the PIREP
+        $simbrief = $flight->simbrief()->where('user_id', $user->id)->first();
+
+        if ($simbrief !== null) {
+            $attrs['simbrief_id'] = $simbrief->id;
+        }
+
         try {
             $pirep = $this->pirepService->prefile(Auth::user(), $attrs);
+            $this->generateFares(Aircraft::find($aircraft), $flight, $pirep);
         } catch (\Throwable $e) {
             // parse the exception to present it cleanly to the user the reason for the error
-
+            Log::error($e);
             return response()->json(['message' => $e->getMessage()], 500);
         }
         return response()->json(['trackingID' => $pirep->id]);
