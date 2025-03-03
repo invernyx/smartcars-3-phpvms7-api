@@ -868,9 +868,14 @@
                             "schema": {
                                 "type": "object",
                                 "required": [
+                                    "uuid",
                                     "bidID"
                                 ],
                                 "properties": {
+                                    "uuid": {
+                                        "type": "string",
+                                        "format": "uuid"
+                                    },
                                     "bidID": {
                                         "oneOf": [
                                             {
