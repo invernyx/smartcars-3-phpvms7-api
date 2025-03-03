@@ -253,7 +253,7 @@ class FlightsController extends Controller
                 $fuel_amount = intval($matches[1]);
                 $fuel_units = $matches[2];
                 // Convert kg to lbs if necessary
-                if (strtolower($fuel_units) === 'kg') {
+                if (strtolower($fuel_units) === 'kgs') {
                     $fuel_amount = $fuel_amount * 2.20462; // 1 kg = 2.20462 lbs
                 }
                 $pirep->block_fuel = $fuel_amount;
