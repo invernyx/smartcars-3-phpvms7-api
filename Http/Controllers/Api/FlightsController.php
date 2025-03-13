@@ -310,6 +310,19 @@ class FlightsController extends Controller
                 $query['arr_airport_id'] = $apt->id;
             }
         }
+	if ($request->has('minimumDistance')) {
+		array_push($query, ['distance', '>=', (int)$request->query('minimumDistance')]);
+	}
+	if ($request->has('maximumDistance')) {
+		array_push($query, ['distance', '<=', (int)$request->query('maximumDistance')]);
+	}
+	if ($request->has('minimumFlightTime')) {
+		array_push($query, ['flight_time', '>=', (int)$request->query('minimumFlightTime') * 60]);
+	}
+	if ($request->has('maximumFlightTime')) {
+		array_push($query, ['flight_time', '<=', (int)$request->query('maximumFlightTime') * 60]);
+	}
+
         if ($request->has('aircraft') && $request->query('aircraft') !== null) {
             // Yank the subfleet by ID
             $apt = Subfleet::find($request->query('aircraft'));
