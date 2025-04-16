@@ -3,6 +3,7 @@
 namespace Modules\SmartCARS3phpVMS7Api\Http\Controllers\Api;
 
 use App\Contracts\Controller;
+use App\Models\Rank;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -14,11 +15,8 @@ use Illuminate\Support\Facades\Log;
  */
 class PilotController extends Controller
 {
-    private function retrieveUserInformation($user)
+    private function retrieveUserInformation(User $user)
     {
-
-        $pilotIDSetting = setting('pilots_id_length', 4);
-        $avatar = null; //$user->gravatar(38);
 
         $name = explode(' ', $user['name']);
         if (count($name) <= 1) {
@@ -28,17 +26,20 @@ class PilotController extends Controller
             $first = $name[0];
             $last = $name[1];
         }
+
+        $rank = Rank::find($user['rank_id']);
+
         return [
-            'dbID'      => $user['id'],
-            'pilotID'   => $user['airline']['icao'] . str_pad($user['pilot_id'], $pilotIDSetting, "0", STR_PAD_LEFT),
+            'dbID'      => $user->id,
+            'pilotID'   => $user->ident,
             'firstName' => $first,
             'lastName'  => $last,
-            'email'     => $user['email'],
-            'rank'      => $user['rank']['name'],
-            'rankImage' => null, // TODO: Add Rank Image
+            'email'     => $user->email,
+            'rank'      => $rank->name,
+            'rankImage' => $rank->image_url ?? null,
             'rankLevel' => 0,
             'avatar'    => $user->resolveAvatarUrl(),
-            'session'   => $user['api_key']
+            'session'   => $user->api_key
         ];
     }
     /**
