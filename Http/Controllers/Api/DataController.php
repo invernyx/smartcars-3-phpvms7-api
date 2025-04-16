@@ -62,7 +62,7 @@ class DataController extends Controller
     }
     public function airports(Request $request)
     {
-        $airports = Airport::get()->map(function($apt) {
+        $airports = Airport::withTrashed()->get()->map(function($apt) {
             return [
                 'id' => $apt->id,
                 'code' => $apt->icao,
