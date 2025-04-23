@@ -14,8 +14,7 @@ class EventServiceProvider extends ServiceProvider
      * The event listener mappings for the application.
      */
     protected $listen = [
-        CronFifteenMinute::class => [DeleteCharterFlights::class],
-        CronFiveMinute::class    => [CleanActiveFlights::class]
+        CronFifteenMinute::class => [DeleteCharterFlights::class]
     ];
 
     /**
