@@ -33,6 +33,7 @@ use GuzzleHttp\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Modules\SmartCARS3phpVMS7Api\Actions\PirepDistanceCalculation;
 use Modules\SmartCARS3phpVMS7Api\Jobs\CalculatePirepDistance;
 use Modules\SmartCARS3phpVMS7Api\Models\ActiveFlight;
@@ -517,6 +518,7 @@ class FlightsController extends Controller
         }
         $pirep->save();
         $pirep->acars()->create([
+            'id'       => Str::orderedUuid(),
             'status'   => $pirep->status,
             'type'     => AcarsType::FLIGHT_PATH,
             'lat'      => $input['latitude'],
