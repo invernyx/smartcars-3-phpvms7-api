@@ -56,7 +56,7 @@ class DeleteCharterFlights extends Listener
                     $pirep->state == PirepState::REJECTED)
                 {
                     Log::debug("Deleted ".$flight->id);
-                    $flight->delete();
+                    $flight->foreceDelete();
                     continue;
                 }
             }
@@ -65,7 +65,7 @@ class DeleteCharterFlights extends Listener
             $bids = Bid::where('flight_id', $flight->id)->count();
             if ($bids == 0) {
                 Log::debug("Deleted ".$flight->id);
-                $flight->delete();
+                $flight->forceDelete();
 
                 continue;
             }
