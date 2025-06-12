@@ -12,7 +12,10 @@ use \Modules\SmartCARS3phpVMS7Api\Http\Middleware\SCHeaders;
 
 Route::group(['middleware' => [SCHeaders::class]], function() {
     Route::match(['get', 'options'], '/', function () {
-        return response()->json(["apiVersion" => "0.5.0", "handler" => "phpvms7"]);
+        $moduleJson = \Illuminate\Support\Facades\File::get(base_path('modules/SmartCARS3phpVMS7Api/module.json'));
+        $moduleData = json_decode($moduleJson, true);
+        $version = $moduleData['version'] ?? 'unknown';
+        return response()->json(["apiVersion" => $version, "handler" => "phpvms7"]);
     });
     Route::match(['post', 'options'], '/pilot/login', [PilotController::class, 'login']);
     Route::match(['post', 'options'], '/pilot/resume', [PilotController::class, 'resume']);
@@ -29,14 +32,16 @@ Route::group(['middleware' => [SCHeaders::class]], function() {
         Route::group(['prefix' => '/pireps', 'controller' => PirepsController::class], function () {
             Route::match(['get', 'options', 'post'], '/details', 'details');
             Route::match(['get', 'options', 'post'], '/search', 'search');
+            Route::match(['get', 'options', 'post'], '/latest', 'latest');
         });
         Route::group(['prefix' => '/flights', 'controller' => FlightsController::class], function () {
             Route::match(['post', 'options'], '/book', 'book');
+            Route::match(['post', 'options'], '/rebook', 'rebook');
             Route::match(['get', 'options'], '/bookings', 'bookings');
             Route::match(['post', 'options'], '/charter', 'charter');
             Route::match(['post', 'options'], '/complete', 'complete');
             Route::match(['post', 'options'], '/cancel', 'cancel');
-            Route::match(['post', 'options'], '/prefile', 'prefile');
+            Route::match(['post', 'options'], '/start', 'start');
             Route::match(['get', 'options'], '/search', 'search');
             Route::match(['post', 'options'], '/unbook', 'unbook');
             Route::match(['post', 'options'], '/update', 'update');

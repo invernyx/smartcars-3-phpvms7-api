@@ -4,12 +4,14 @@ namespace Modules\SmartCARS3phpVMS7Api\Http\Controllers\Api;
 
 use App\Contracts\Controller;
 use App\Models\Enums\PirepState;
+use App\Models\Acars;
 use App\Models\Pirep;
 use App\Models\PirepComment;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
+use Illuminate\Support\Facades\Auth;
 
 /**
  * class ApiController
@@ -30,30 +32,15 @@ class PirepsController extends Controller
         $user_id = $request->get('pilotID');
 
         $pirep = Pirep::find($pirepID);
-        $pirep->load('comments', 'acars_logs', 'acars');
+        $pirep->load('comments', 'acars');
 
-        $flightData = [];
-        $i = 0;
-
-        foreach ($pirep->acars_logs->sortBy('created_at') as $acars_log) {
-            $flightData[] = [
-                'eventId' => $acars_log->id,
-                'eventTimestamp' => $acars_log->created_at,
-                'eventElapsedTime' => $i,
-                'eventCondition' => null,
-                'message' => $acars_log->log
-            ];
-        }
         return response()->json([
-            'flightLog' => $pirep->comments->map(function ($a ) { return $a->comment;}),
             'locationData' => $pirep->acars->map(function ($a) {return ['latitude' => $a->lat, 'longitude' => $a->lon, 'heading' => $a->heading];}),
-            'flightData' => $flightData
+            'flightData' => array_reverse($pirep->comments->map(function ($a ) { return ['eventId' => $a->id, 'eventTimestamp' => $a->created_at, 'eventElapsedTime' => 0, 'eventCondition' => null, 'message' => $a->comment];})->toArray()),
         ]);
-
     }
-
     /**
-     * Handles /hello
+     * Handles /search
      *
      * @param Request $request
      *
@@ -67,9 +54,9 @@ class PirepsController extends Controller
         foreach ($user->pireps->sortByDesc('created_at') as $pirep) {
             $output_pireps[] = [
                 'id' => $pirep->id,
-                'submitDate' => Carbon::createFromTimeString($pirep->submitted_at)->toDateString(),
+                'submitDate' => Carbon::createFromTimeString($pirep->submitted_at)->toDateTimeString(),
                 'airlineCode' => $pirep->airline->icao,
-                'route' => [],
+                'route' => $pirep->route ? $pirep->route : '',
                 'number' => $pirep->flight_number,
                 'distance' => $pirep->planned_distance->getResponseUnits()['mi'],
                 'flightType' => $pirep->flight_type,
@@ -84,6 +71,41 @@ class PirepsController extends Controller
         }
         return response()->json($output_pireps);
     }
+
+    /**
+     * Handles /latest
+     *
+     * @param Request $request
+     *
+     * @return mixed
+     */
+    public function latest(Request $request)
+    {
+        $user = $user = Auth::user();
+        $pirep = Pirep::where('user_id', $user->id)->orderBy('created_at', 'desc')->first();
+
+        if (!$pirep) {
+            return response()->json([]);
+        }
+
+        return response()->json([
+            'id' => $pirep->id,
+            'submitDate' => Carbon::createFromTimeString($pirep->submitted_at)->toDateString(),
+            'airlineCode' => $pirep->airline->icao,
+            'route' => $pirep->route ? $pirep->route : '',
+            'number' => $pirep->flight_number,
+            'distance' => $pirep->planned_distance->getResponseUnits()['mi'],
+            'flightType' => $pirep->flight_type,
+            'departureAirport' => $pirep->dpt_airport_id,
+            'arrivalAirport' => $pirep->arr_airport_id,
+            'aircraft' => $pirep->aircraft_id,
+            'status' => self::getStatus($pirep->state),
+            'flightTime' => $pirep->flight_time / 60,
+            'landingRate' => $pirep->landing_rate,
+            'fuelUsed' => $pirep->fuel_used->getResponseUnits()['lbs']
+        ]);
+    }
+
     function getStatus($value) {
         switch(intval($value)) {
             case 1:

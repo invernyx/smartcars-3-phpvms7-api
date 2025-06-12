@@ -4,6 +4,8 @@ namespace Modules\SmartCARS3phpVMS7Api\Http\Controllers\Api;
 
 use App\Contracts\Controller;
 use App\Events\PirepPrefiled;
+use App\Exceptions\AirportNotFound;
+use App\Exceptions\UserNotAtAirport;
 use App\Models\Acars;
 use App\Models\Aircraft;
 use App\Models\Airline;
@@ -27,13 +29,11 @@ use App\Services\FareService;
 use App\Services\FlightService;
 use App\Services\PirepService;
 use Carbon\Carbon;
-use GuzzleHttp\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Modules\SmartCARS3phpVMS7Api\Actions\PirepDistanceCalculation;
-use Modules\SmartCARS3phpVMS7Api\Jobs\CalculatePirepDistance;
-use Modules\SmartCARS3phpVMS7Api\Models\ActiveFlight;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
 use Modules\SmartCARS3phpVMS7Api\Providers\AppServiceProvider;
 
@@ -43,8 +43,12 @@ use Modules\SmartCARS3phpVMS7Api\Providers\AppServiceProvider;
  */
 class FlightsController extends Controller
 {
-    public function __construct(public FlightService $flightService, public FareService $fareService, public BidService $bidService, public PirepService $pirepService)
-    {
+    public function __construct(
+        public FlightService $flightService,
+        public FareService $fareService,
+        public BidService $bidService,
+        public PirepService $pirepService
+    ) {
     }
 
     /**
@@ -59,6 +63,20 @@ class FlightsController extends Controller
         $flight = Flight::find($request->input('flightID'));
         $user = User::find($request->get('pilotID'));
         $bid = $this->bidService->addBid($flight, $user);
+        // force setting the aircraft selected for smartCARS bidding
+        if ($request->input('aircraftID') !== null) {
+            $bid = Bid::find($bid->id);
+            $bid->aircraft_id = $request->input('aircraftID');
+            $bid->save();
+        }
+        return response()->json(["bidID" => $bid->id]);
+    }
+    public function rebook(Request $request)
+    {
+        $bid = Bid::find($request->input('bidID'));
+        // force setting the aircraft selected for smartCARS bidding
+        $bid->aircraft_id = $request->input('aircraftID');
+        $bid->save();
         return response()->json(["bidID" => $bid->id]);
     }
     public function bookings(Request $request)
@@ -95,7 +113,7 @@ class FlightsController extends Controller
                 "code"             => $bid->flight->airline->code,
                 "departureAirport" => $bid->flight->dpt_airport_id,
                 "arrivalAirport"   => $bid->flight->arr_airport_id,
-                "route"            => null,
+                "route"            => $bid->flight->route ? explode(" ", $bid->flight->route) : null,
                 "flightLevel"      => $bid->flight->level,
                 "distance"         => $bid->flight->distance->local(),
                 "departureTime"    => $bid->flight->dpt_time,
@@ -104,7 +122,8 @@ class FlightsController extends Controller
                 "daysOfWeek"       => $bid->flight->days,
                 "flightID"         => $bid->flight->id,
                 "type"             => $this->flightType($bid->flight->flight_type),
-                "aircraft"         => $aircraft
+                "aircraft"         => $aircraft,
+                "notes"            => $bid->flight->notes
             ];
         }
 
@@ -112,10 +131,10 @@ class FlightsController extends Controller
     }
     public function cancel(Request $request)
     {
-        $af = ActiveFlight::where('bid_id', $request->input('bidID'))->first();
-        $pirep = Pirep::find($af->pirep_id);
+        $input = $request->all();
+        $pirep = Pirep::find($input['uuid']);
         $this->pirepService->cancel($pirep);
-        $af->delete();
+        return response()->json(['status' => 200]);
     }
     public function charter(Request $request)
     {
@@ -154,7 +173,8 @@ class FlightsController extends Controller
             'visible'        => false,
             'dpt_airport_id' => $request->departure,
             'arr_airport_id' => $request->arrival,
-            'owner_type'     => AppServiceProvider::class
+            'owner_type'     => AppServiceProvider::class,
+            'user_id'        => Auth::user()->id
         ];
         // Check if the pirep already exists.
         try {
@@ -166,23 +186,33 @@ class FlightsController extends Controller
         }
         // Grab the Aircraft
         $aircraft = Aircraft::find($request->aircraft);
-        // Assign the subfleet the aircraft is with to the flight to limit the options
-        $flight->subfleets()->attach($aircraft->subfleet);
 
         $bid = $this->bidService->addBid($flight, $request->user(), $aircraft);
+        // force assign the aircraft to the bid
+        $bid = Bid::find($bid->id);
+        $bid->aircraft_id = $aircraft->id;
+        $bid->save();
         return response()->json(['bidID' => $bid->id]);
     }
     public function complete(Request $request)
     {
         $input = $request->all();
-        logger($input);
-        //dd($request);
-        $af = ActiveFlight::where('bid_id', $input['bidID'])->first();
-        if ($af === null) {
-            abort(404);
+        if (gettype($input['flightLog']) === "string") {
+            $input['flightLog'] = base64_decode($input['flightLog'], true);
+            $input['flightLog'] = explode("\n", $input['flightLog']);
+            //logger("Flight Log");
+            //logger($input['flightLog']);
         }
-        $pirep = Pirep::find($af->pirep_id);
-        Log::debug("Found Pirep to close out");
+        if (gettype($input['flightData']) === "string") {
+            $input['flightData'] = base64_decode($input['flightData'], true);
+            $input['flightData'] = json_decode($input['flightData'], true);
+            //logger("Flight Data");
+            //logger($input['flightData']);
+        }
+        $pirep = Pirep::find($input['uuid']);
+        
+
+        //Log::debug("Found Pirep to close out");
         $pirep->status = PirepStatus::ARRIVED;
         $pirep->state = PirepState::PENDING;
         $pirep->source = PirepSource::ACARS;
@@ -190,24 +220,33 @@ class FlightsController extends Controller
         $pirep->landing_rate = $input['landingRate'];
         $pirep->fuel_used = $input['fuelUsed'];
         $pirep->flight_time = $input['flightTime'] * 60;
+        $pirep->route = $input['route'] ? join(" ", $input['route']) : '';
         $pirep->submitted_at = Carbon::now('UTC');
-
-        if (gettype($input['flightLog']) === "string") {
-            $input['flightLog'] = base64_decode($input['flightLog'], true);
-            $input['flightLog'] = explode("\n", $input['flightLog']);
-            logger($input['flightLog']);
-        }
-        if (gettype($input['flightData']) === "string") {
-            $input['flightData'] = base64_decode($input['flightData'], true);
-            $input['flightData'] = json_decode($input['flightData'], true);
-            logger($input['flightData']);
-        }
         foreach ($input['flightData'] as $data) {
             $log_item = new Acars();
             $log_item->type = AcarsType::LOG;
             $log_item->log = $data['message'];
             $log_item->created_at = Carbon::createFromTimeString($data['eventTimestamp']);
             $pirep->acars_logs()->save($log_item);
+            // hotfix for block fuel. Replace this code when block fuel is properly implemented in smartCARS
+            if (str_contains($data['message'], "Pushing back with")) {
+                // example: "Pushing back with 1000 lbs of fuel"
+                // extract the number and units
+                //logger($data['message']);
+                preg_match('/Pushing back with (\d+) (\w+) of fuel/', $data['message'], $matches);
+                // check if we have 3 matches
+                if (count($matches) !== 3) {
+                    continue;
+                }
+                //logger($matches);
+                $fuel_amount = intval($matches[1]);
+                $fuel_units = $matches[2];
+                // Convert kg to lbs if necessary
+                if (strtolower($fuel_units) === 'kgs') {
+                    $fuel_amount = $fuel_amount * 2.20462; // 1 kg = 2.20462 lbs
+                }
+                $pirep->block_fuel = $fuel_amount;
+            }
         }
         if (!is_null($input['comments'])) {
             foreach ($input['flightLog'] as $comment) {
@@ -227,7 +266,6 @@ class FlightsController extends Controller
         $pirep->distance = PirepDistanceCalculation::calculatePirepDistance($pirep);
         $pirep->save();
         $this->pirepService->submit($pirep);
-        ActiveFlight::where('pirep_id', $pirep->id)->delete();
         return response()->json(['pirepID' => $pirep->id]);
 
     }
@@ -237,6 +275,13 @@ class FlightsController extends Controller
 
         $query = [];
         $subfleet = null;
+        $limit = 100;
+
+        if ($request->has('limit') && $request->query('limit') !== null) {
+            $limit = $request->query('limit');
+            $limit = min($limit, 100);
+        }
+
         if ($request->has('departureAirport') && $request->query('departureAirport') !== null) {
             $apt = Airport::where('icao', $request->query('departureAirport'))->first();
             if (!is_null($apt)) {
@@ -253,6 +298,19 @@ class FlightsController extends Controller
                 $query['arr_airport_id'] = $apt->id;
             }
         }
+	if ($request->has('minimumDistance')) {
+		array_push($query, ['distance', '>=', (int)$request->query('minimumDistance')]);
+	}
+	if ($request->has('maximumDistance')) {
+		array_push($query, ['distance', '<=', (int)$request->query('maximumDistance')]);
+	}
+	if ($request->has('minimumFlightTime')) {
+		array_push($query, ['flight_time', '>=', (int)$request->query('minimumFlightTime') * 60]);
+	}
+	if ($request->has('maximumFlightTime')) {
+		array_push($query, ['flight_time', '<=', (int)$request->query('maximumFlightTime') * 60]);
+	}
+
         if ($request->has('aircraft') && $request->query('aircraft') !== null) {
             // Yank the subfleet by ID
             $apt = Subfleet::find($request->query('aircraft'));
@@ -272,15 +330,14 @@ class FlightsController extends Controller
             }
         } else {
             if (empty($query)) {
-                $flights = Flight::with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take(100)->get();
+                $flights = Flight::with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take($limit)->get();
             } else {
-                $flights = Flight::where($query)->with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take(100)->get();
+                $flights = Flight::where($query)->with('subfleets', 'subfleets.aircraft', 'airline')->where('visible', true)->take($limit)->get();
             }
         }
 
         foreach ($flights as $flight) {
             $aircraft = [];
-            //dd($bid);
             $flight = $this->flightService->filterSubfleets($request->user(), $flight);
             foreach ($flight->subfleets as $subfleet) {
                 foreach ($subfleet->aircraft as $acf) {
@@ -295,48 +352,67 @@ class FlightsController extends Controller
                 "departureAirport" => $flight->dpt_airport_id,
                 "arrivalAirport"   => $flight->arr_airport_id,
                 "flightLevel"      => $flight->level,
+                "route"            => $flight->route ? explode(" ", $flight->route) : null,
                 "distance"         => $flight->distance->local(),
                 "departureTime"    => $flight->dpt_time,
                 "arrivalTime"      => $flight->arr_time,
                 "flightTime"       => $ft_converted,
                 "daysOfWeek"       => [],
                 "type"             => $this->flightType($flight->flight_type),
-                "aircraft"         => $aircraft
+                "aircraft"         => sizeof($aircraft) === 1 ? $aircraft[0] : $aircraft,
+                "notes"            => $flight->notes
             ];
         }
 
         return response()->json($output);
     }
-    public function prefile(Request $request)
+    public function start(Request $request)
     {
         $user = Auth::user();
         $bid = Bid::find($request->input('bidID'));
         logger($request->all());
         $flight = Flight::find($bid->flight_id);
+        $aircraft = null;
+        if ($bid->flight->simbrief) {
+            $aircraft = $bid->flight->simbrief->aircraft->id;
+        } elseif ($bid->aircraft_id !== null) {
+            $aircraft = $bid->aircraft_id;
+        } else {
+            // if no aircraft is available, return a 500 error saying no aircraft is attached to the bid
+            return response()->json(['message' => 'No aircraft attached to bid'], 500);
+        }
 
         $attrs = [
-            'flight_number'  => $flight->flight_number,
-            'airline_id'     => $flight->airline_id,
-            'route_code'     => $flight->route_code,
-            'route_leg'      => $flight->route_leg,
-            'flight_type'    => $flight->flight_type,
-            'dpt_airport_id' => $flight->dpt_airport_id,
-            'arr_airport_id' => $flight->arr_airport_id,
-            'aircraft_id'    => $request->input('aircraftID'),
-            'flight_id'      => $flight->id,
-            'source'         => PirepSource::ACARS,
-            'source_name'    => "smartCARS 3"
+            'flight_number'    => $flight->flight_number,
+            'airline_id'       => $flight->airline_id,
+            'route_code'       => $flight->route_code,
+            'route_leg'        => $flight->route_leg,
+            'flight_type'      => $flight->flight_type,
+            'dpt_airport_id'   => $flight->dpt_airport_id,
+            'arr_airport_id'   => $flight->arr_airport_id,
+            'planned_distance' => $flight->distance,
+            'aircraft_id'      => $aircraft,
+            'flight_id'        => $flight->id,
+            'source'           => PirepSource::ACARS,
+            'source_name'      => "smartCARS 3"
         ];
-        // Check if the pirep already exists.
-        //$existing = Pirep::where(['user_id' => $user->id, 'state' => PirepState::IN_PROGRESS])->first();
-        //if (is_null($existing)) {
+        // find if there's a SimBrief OFP for this flight and user. If so, add it to the PIREP
+        $simbrief = $flight->simbrief()->where('user_id', $user->id)->first();
+
+        if ($simbrief !== null) {
+            $attrs['simbrief_id'] = $simbrief->id;
+        }
+
         try {
             $pirep = $this->pirepService->prefile(Auth::user(), $attrs);
-        } catch (\Exception $e) {
-            logger($e);
+            $this->generateFares(Aircraft::find($aircraft), $flight, $pirep);
+        } catch (\Throwable $e) {
+            // parse the exception to present it cleanly to the user the reason for the error
+            Log::error($e);
             return response()->json(['message' => $e->getMessage()], 500);
         }
-        return response()->json($pirep);
+        Log::debug("Sending TrackingID: ".$pirep->id);
+        return response()->json(['trackingID' => $pirep->id]);
         //}
         //return response()->json($existing);
 
@@ -358,68 +434,53 @@ class FlightsController extends Controller
     {
         $input = $request->all();
         // Check if there's an active flight under that bid.
-
-        $af = ActiveFlight::where('bid_id', $input['bidID'])->first();
-
-        if ($af === null) {
-            // This should be a new PIREP that needs to be field. Create a draft PIREP.
-            $bid = Bid::find($request->input('bidID'));
-            logger($request->all());
-            $flight = Flight::find($bid->flight_id);
-
-            $attrs = [
-                'user_id'          => Auth::user()->id,
-                'flight_number'    => $flight->flight_number,
-                'airline_id'       => $flight->airline_id,
-                'route_code'       => $flight->route_code,
-                'route_leg'        => $flight->route_leg,
-                'flight_type'      => $flight->flight_type,
-                'dpt_airport_id'   => $flight->dpt_airport_id,
-                'arr_airport_id'   => $flight->arr_airport_id,
-                'planned_distance' => $flight->distance,
-                'aircraft_id'      => $request->input('aircraft'),
-                'flight_id'        => $flight->id,
-                'state'            => PirepState::IN_PROGRESS,
-                'status'           => $this->phaseToStatus($input['phase']),
-                'source'           => PirepSource::ACARS,
-                'source_name'      => "smartCARS 3"
-            ];
-            $pirep = new Pirep($attrs);
-            $pirep->save();
-            $this->generateFares(Aircraft::find($request->input('aircraft')), $flight, $pirep);
-            event(new PirepPrefiled($pirep));
-            // Add new Active Flight
-            ActiveFlight::create([
-                'bid_id'   => $input['bidID'],
-                'pirep_id' => $pirep->id
-            ]);
-
-        } else {
-            $pirep = Pirep::find($af->pirep_id);
-            // Check if a phase has changed
-            $new_status = $this->phaseToStatus($input['phase']);
-            if ($pirep->status != $new_status) {
-                if ($pirep->status == PirepStatus::TAKEOFF && $new_status == PirepStatus::INIT_CLIM) {
-                    $pirep->block_off_time == Carbon::now();
-                }
-                if ($pirep->status == PirepStatus::LANDING && $new_status == PirepStatus::LANDED) {
-                    $pirep->block_on_time == Carbon::now();
-                }
-            }
-            $pirep->status = $new_status;
-            $pirep->updated_at = Carbon::now();
-            $pirep->save();
-            $pirep->acars()->create([
-                'status'   => $new_status,
-                'type'     => AcarsType::FLIGHT_PATH,
-                'lat'      => $input['latitude'],
-                'lon'      => $input['longitude'],
-                'distance' => $pirep->planned_distance->local(2) - $input['distanceRemaining'],
-                'heading'  => $input['heading'],
-                'altitude' => $input['altitude'],
-                'gs'       => $input['groundSpeed']
-            ]);
+        $pirep = Pirep::find($input['uuid']);
+        // if no pirep, return a 404
+        if ($pirep === null) {
+            return response()->json(['message' => 'No active flight'], 404);
         }
+
+        // Check if a phase has changed
+        $pirep->status = $this->phaseToStatus($input['phase']);
+
+        // This section of code is more or less a patch until a better solution is implemented.
+        if (
+            (
+                $pirep->status == PirepStatus::TAKEOFF ||
+                $pirep->status == PirepStatus::INIT_CLIM ||
+                $pirep->status == PirepStatus::ENROUTE
+            ) &&
+            $pirep->block_off_time == null) {
+            $pirep->block_off_time = Carbon::now();
+        }
+        if (
+            (
+                $pirep->status == PirepStatus::LANDED ||
+                $pirep->status == PirepStatus::ARRIVED
+            ) &&
+            $pirep->block_on_time == null) {
+            $pirep->block_on_time == Carbon::now();
+        }
+        $pirep->updated_at = Carbon::now();
+
+        // Get current flight time by checking time since first ACARS telemetry report.
+        $first_acars = $pirep->acars()->first();
+        if ($first_acars !== null) {
+            $minutes = Carbon::now()->diffInMinutes($first_acars->created_at);
+            $pirep->flight_time = $minutes;
+        }
+        $pirep->save();
+        $pirep->acars()->create([
+            'id'       => Str::orderedUuid(),
+            'status'   => $pirep->status,
+            'type'     => AcarsType::FLIGHT_PATH,
+            'lat'      => $input['latitude'],
+            'lon'      => $input['longitude'],
+            'distance' => $pirep->planned_distance->local(2) - $input['distanceRemaining'],
+            'heading'  => $input['heading'],
+            'altitude' => $input['altitude'],
+            'gs'       => $input['groundSpeed']
+        ]);
     }
 
     public function phaseToStatus(string $phase)

@@ -22,11 +22,6 @@ class CreateScPirepLogsTable extends Migration
             $table->binary('log');
             $table->timestamps();
         });
-        Schema::create('sc_active_flights', function (Blueprint $table){
-            $table->increments('id');
-            $table->bigInteger('bid_id');
-            $table->string('pirep_id');
-        });
     }
 
     /**
@@ -37,6 +32,5 @@ class CreateScPirepLogsTable extends Migration
     public function down()
     {
         Schema::dropIfExists('sc_pirep_logs');
-        Schema::dropIfExists('sc_active_flights');
     }
 }
