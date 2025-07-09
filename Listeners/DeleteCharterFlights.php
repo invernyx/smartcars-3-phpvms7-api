@@ -56,7 +56,7 @@ class DeleteCharterFlights extends Listener
                     $pirep->state == PirepState::REJECTED)
                 {
                     Log::debug("Deleted ".$flight->id);
-                    $flight->foreceDelete();
+                    $flight->forceDelete();
                     continue;
                 }
             }
