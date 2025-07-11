@@ -6,8 +6,8 @@ use Closure;
 use Illuminate\Http\Request;
 
 /**
- * Class SCAuth
- * @package Modules\SmartCARSvms7\Http\Middleware
+ * Class SCHeaders
+ * @package Modules\SmartCARS3phpVMS7Api\Http\Middleware
  */
 class SCHeaders
 {
