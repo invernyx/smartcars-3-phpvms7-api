@@ -1,7 +1,7 @@
-<h1 align="center">smartCARS 3 phpVMS 7 API</h1>
-<div align="center">
+    <h1 align="center">smartCARS 3 phpVMS 7 API</h1>
+    <div align="center">
     <i>Web Script Files for smartCARS 3</i>
-</div>
+    </div>
 
 ## Introduction
 smartCARS 3 is a web-based flight tracking system for virtual airlines. It is a complete rewrite of the original smartCARS system, and is designed to be more flexible and easier to use. This repository contains the web script files for smartCARS 3 in phpVMS 7.
