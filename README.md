@@ -30,7 +30,7 @@ Using the Admin Interface, go to Modules and Enable the module.
 Verify that the installation was successful by visiting the base URL in your browser. You should see a JSON response with the version number of the API and the name of your handler.
 
 Assuming you have placed phpVMS 7 in your `public_html`:
-`https://yourdomainhere.com/api/smartcars/`
+`https://crew.voegolvirtual.com/api/smartcars/`
 
 This URL will be the "Script URL" option in smartCARS 3 Central when managing your community.
 
@@ -54,7 +54,7 @@ For these accounts, the user is to use a `email/api key` (where the user will en
 
 Unlike phpVMS 5, Charter Flights behave differently in phpVMS 7.
 
-For the callsign field, if just a number is supplied, your flight will be assigned automatically to the first airline in your system, or a airline ID you define in your .env file by using the `SC3_CHARTER_AIRLINE_ID` variable (e.g. `SC3_CHARTER_AIRLINE_ID=1` for airline id 1).
+For the callsign field, if just a number is supplied, your flight will be assigned automatically to the first airline in your system, or a airline ID you define in your .env file by using the `VOE GOL Virtual` variable (e.g. `GLO_CHARTER_AIRLINE_ID=1` for airline id 1).
 
 If you supply a ICAO or IATA code with the flight number (e.g. `DAL1421` or `DL1421`, the API will search to see if that code exists in the system. If it finds it, the flight will be flown under that code and flight number. If it cannot find it, it'll fallback to the first airline in your system or what's set in the env variable.
 
@@ -66,6 +66,6 @@ If your community has the Bids > Restrict Aircraft setting enabled, the aircraft
 
 Included with this API is a job that'll recalculate PIREP distances for all smartCARS pireps, based on the ACARS telemetry logs on the server.
 
-To execute this, navigate directly to `/admin/smartcars/recalc` in your web browser (e.g. `https://myva.com/admin/smartcars/recalc`) to start the recalculation job.
+To execute this, navigate directly to `/admin/smartcars/recalc` in your web browser (e.g. `https://crew.voegolvirtual.com/admin/smartcars/recalc`) to start the recalculation job.
 
 If you have a private discord notification channel setup, you will receive progress updates regarding the status of the job as it executes on the backend.
