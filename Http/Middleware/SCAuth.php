@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\SmartcARS3phpVMS7Api\Http\Middleware;
+namespace Modules\SmartCARS3phpVMS7Api\Http\Middleware;
 
 use App\Models\User;
 use Closure;
@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Class SCAuth
- * @package Modules\SmartCARSvms7\Http\Middleware
+ * @package Modules\SmartCARS3phpVMS7Api\Http\Middleware
  */
 class SCAuth
 {
