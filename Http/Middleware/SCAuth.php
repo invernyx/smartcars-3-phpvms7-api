@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\SmartcARS3phpVMS7Api\Http\Middleware;
+namespace Modules\SmartCARS3phpVMS7Api\Http\Middleware;
 
 use App\Models\User;
 use Closure;
