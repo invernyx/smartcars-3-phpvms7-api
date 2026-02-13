@@ -222,6 +222,9 @@ class FlightsController extends Controller
         $pirep->flight_time = $input['flightTime'] * 60;
         $pirep->route = $input['route'] ? join(" ", $input['route']) : '';
         $pirep->submitted_at = Carbon::now('UTC');
+
+		$pirep_fields = [];
+		
         foreach ($input['flightData'] as $data) {
             $log_item = new Acars();
             $log_item->type = AcarsType::LOG;
@@ -247,6 +250,23 @@ class FlightsController extends Controller
                 }
                 $pirep->block_fuel = $fuel_amount;
             }
+			// Hotfix for Pirep Fields. If the log contains !KV:, we need to extract the key-value pairs, semi-colon delimited
+            if (str_contains($data['message'], "!KV:")) {
+                // example: !KV:field1=value1;field2=value2;
+                $kv_string = Str::after($data['message'], '!KV:');
+                $kv_pairs = explode(';', $kv_string);
+                foreach ($kv_pairs as $pair) {
+                    if (empty($pair)) {
+                        continue;
+                    }
+                    list($key, $value) = explode('=', $pair);
+                    $pirep_fields[] = [
+                        'name' => $key,
+                        'value' => $value,
+                        'source' => 'smartCARS'
+                    ];
+                }
+            }
         }
         if (!is_null($input['comments'])) {
             foreach ($input['flightLog'] as $comment) {
@@ -265,6 +285,10 @@ class FlightsController extends Controller
         ]);
         $pirep->distance = PirepDistanceCalculation::calculatePirepDistance($pirep);
         $pirep->save();
+		// Save Pirep Fields
+        if (!empty($pirep_fields)) {
+            $this->pirepService->updateCustomFields($pirep->id, $pirep_fields);
+        }
         $this->pirepService->submit($pirep);
         return response()->json(['pirepID' => $pirep->id]);
 
