@@ -3,7 +3,6 @@
 namespace Modules\SmartCARS3phpVMS7Api\Providers;
 
 use App\Contracts\Modules\ServiceProvider;
-use Modules\SmartCARS3phpVMS7Api\Console\RecalculatePirepDistance;
 
 /**
  * @package $NAMESPACE$
