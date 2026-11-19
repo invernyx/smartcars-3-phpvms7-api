@@ -24,6 +24,10 @@ class SCAuth
     public function handle(Request $request, Closure $next)
     {
         $token = $request->bearerToken();
+        // A missing token would match a pilot without an API key (where api_key is null)
+        if (!is_string($token) || $token === '') {
+            return response()->json(['message' => "Invalid Token"], 401);
+        }
 
         $model = User::where('api_key', $token)->first();
         //dd($model);

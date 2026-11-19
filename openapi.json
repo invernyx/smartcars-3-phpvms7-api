@@ -1,15 +1,15 @@
 {
     "openapi": "3.1.0",
     "info": {
-        "version": "1.0.2",
-        "title": "smartCARS 3 Public API"
+        "version": "2.0.0",
+        "title": "smartCARS Public API"
     },
     "paths": {
         "/": {
             "get": {
                 "summary": "API Version",
                 "security": [],
-                "description": "Get the current API version",
+                "description": "Get the current API version and the optional capabilities this backend supports",
                 "responses": {
                     "200": {
                         "description": "200 - Return the API version",
@@ -28,6 +28,17 @@
                                         },
                                         "handler": {
                                             "type": "string"
+                                        },
+                                        "commit": {
+                                            "type": "string",
+                                            "description": "The commit the auto-updater installed (empty for a manual install); read from compiled code, so the auto-update health check can tell new code from cached old code"
+                                        },
+                                        "capabilities": {
+                                            "type": "array",
+                                            "description": "The optional features this backend supports (flight-analyses, verified-analyses, flight-events, arrival-search, flight-destinations, destination-routes, flight-phases, iata-flight-types and, while their setting is enabled, divert and auto-update), the same names as the X-SmartCARS-Capability response header. A feature gated by a setting is listed only while the setting is enabled.",
+                                            "items": {
+                                                "type": "string"
+                                            }
                                         }
                                     }
                                 }
@@ -40,8 +51,27 @@
         "/flights/search": {
             "get": {
                 "summary": "Search Flights",
-                "description": "Search for available flights with optional parameters to filter a search",
+                "description": "Search for available flights with optional parameters to filter a search. Results are ordered by route distance (the great-circle distance between the two airports, shortest first; a flight whose airport has no coordinates (unset, or 0/0) comes last), then departure airport, then arrival airport, then flight id, so a route's flights are always adjacent. A page holds at most limit flights (250 at most). When more results follow, the X-SmartCARS-Next-Cursor header carries a cursor: repeat the same request with it as cursor to get the next page. The totals headers count every matching flight, across all pages. A client that ignores the headers gets the first page.",
                 "parameters": [
+                    {
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 250,
+                            "default": 250
+                        },
+                        "description": "The maximum number of flights on the page"
+                    },
+                    {
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "The X-SmartCARS-Next-Cursor value of the previous page, to get the page after it. Opaque; it does not expire. Flights added or hidden between pages are neither skipped nor repeated among the remaining results. A change to an airport's coordinates between two page requests can move that route's flights. The other parameters are repeated unchanged."
+                    },
                     {
                         "in": "query",
                         "name": "departureAirport",
@@ -103,7 +133,7 @@
                             "type": "integer",
                             "minimum": 0
                         },
-                        "description": "The ID of the aircraft to search for"
+                        "description": "The ID of an aircraft; only flights a subfleet containing it can fly are returned, none for an unknown ID. A non-numeric value is ignored"
                     },
                     {
                         "in": "query",
@@ -111,12 +141,17 @@
                         "schema": {
                             "type": "string"
                         },
-                        "description": "A callsign pattern to search for (does not have to be exact)"
+                        "description": "A part of the callsign (the airline code, IATA or ICAO, followed by the flight number), compared without case"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "200 - Return a list of all available flights",
+                        "description": "200 - Return a page of the available flights",
+                        "headers": {
+                            "X-SmartCARS-Next-Cursor": {"description": "Present when more results follow; send it back as cursor to get the next page. Absent on the last page.", "schema": {"type": "string"}},
+                            "X-SmartCARS-Total-Flights": {"description": "The number of flights matching the search, across all pages.", "schema": {"type": "integer"}},
+                            "X-SmartCARS-Total-Routes": {"description": "The number of distinct departure and arrival airport pairs among the matching flights.", "schema": {"type": "integer"}}
+                        },
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -129,7 +164,7 @@
                         }
                     },
                     "400": {
-                        "description": "400 - Invalid type",
+                        "description": "400 - Invalid type, or a malformed cursor (message Invalid cursor)",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -146,6 +181,296 @@
                                 "schema": {
                                     "type": "object",
                                     "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/flights/destinations": {
+            "get": {
+                "summary": "Flight Destinations",
+                "description": "Lists the arrival airports the community's visible flights serve from one departure airport, with the number of flights to each. Ordered by flights, most first, then by ICAO. Answers an empty array for an airport the community does not know. When the pilots.only_flights_from_current setting is on, an airport other than the pilot's current one also answers an empty array. Capability: flight-destinations. With routes=1 (or routes=true) the answer is the routes form instead: it takes the same search parameters as flights/search (departureAirport, arrivalAirport, minimumDistance, maximumDistance, minimumFlightTime, maximumFlightTime, callsign, aircraft), ignores departure, limit, cursor and flightTypes, and lists every distinct departure and arrival airport pair among the matching visible flights, with the number of flights, the shortest distance in nautical miles and the shortest and longest flight time in hours. It follows flights/search exactly: an unknown departureAirport or arrivalAirport drops that filter, and while the pilots.only_flights_from_current setting is on the pilot's current airport is the departure. Routes are directed (A to B and B to A are two items), ordered like flights/search (route distance, then departure, then arrival), at most 2000 per answer; X-SmartCARS-Total-Routes carries the uncapped count. Capability: destination-routes.",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "departure",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "The ICAO code of the departure airport, trimmed and upper-cased by the backend. Required without routes; ignored with it"
+                    },
+                    {
+                        "in": "query",
+                        "name": "routes",
+                        "schema": {"type": "string"},
+                        "description": "Set to 1 or true for the routes form: every departure and arrival airport pair of the search instead of the arrivals of one departure. Any other value, or none, is the departure form"
+                    },
+                    {
+                        "in": "query",
+                        "name": "departureAirport",
+                        "schema": {"type": "string", "pattern": "^[A-Z]{4}$"},
+                        "description": "Routes form only. The ICAO code for the departure airport"
+                    },
+                    {
+                        "in": "query",
+                        "name": "arrivalAirport",
+                        "schema": {"type": "string", "pattern": "^[A-Z]{4}$"},
+                        "description": "Routes form only. The ICAO code for the arrival airport"
+                    },
+                    {
+                        "in": "query",
+                        "name": "minimumFlightTime",
+                        "schema": {"type": "number", "format": "float", "minimum": 0},
+                        "description": "Routes form only, in hours"
+                    },
+                    {
+                        "in": "query",
+                        "name": "maximumFlightTime",
+                        "schema": {"type": "number", "format": "float", "minimum": 0},
+                        "description": "Routes form only, in hours"
+                    },
+                    {
+                        "in": "query",
+                        "name": "minimumDistance",
+                        "schema": {"type": "number", "format": "float", "minimum": 0},
+                        "description": "Routes form only, in nautical miles"
+                    },
+                    {
+                        "in": "query",
+                        "name": "maximumDistance",
+                        "schema": {"type": "number", "format": "float", "minimum": 0},
+                        "description": "Routes form only, in nautical miles"
+                    },
+                    {
+                        "in": "query",
+                        "name": "aircraft",
+                        "schema": {"type": "integer", "minimum": 0},
+                        "description": "Routes form only. The ID of an aircraft; only flights a subfleet containing it can fly are counted, none for an unknown ID. A non-numeric value is ignored"
+                    },
+                    {
+                        "in": "query",
+                        "name": "callsign",
+                        "schema": {"type": "string"},
+                        "description": "Routes form only. A part of the callsign (the airline code, IATA or ICAO, followed by the flight number), compared without case"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "200 - Return the destinations, or with routes=1 the routes of the search",
+                        "headers": {
+                            "X-SmartCARS-Total-Routes": {
+                                "description": "Routes form only: every matching departure and arrival airport pair, uncapped",
+                                "schema": {"type": "integer"}
+                            }
+                        },
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "oneOf": [
+                                            {
+                                                "type": "object",
+                                                "properties": {
+                                                    "icao": {"type": "string", "description": "The ICAO code of the arrival airport"},
+                                                    "flights": {"type": "integer", "description": "The number of visible flights from the departure airport to it"}
+                                                }
+                                            },
+                                            {
+                                                "type": "object",
+                                                "properties": {
+                                                    "departure": {"type": "string", "description": "The departure airport ID as stored on the flights (the ICAO code in phpVMS 7)"},
+                                                    "arrival": {"type": "string", "description": "The arrival airport ID as stored on the flights (the ICAO code in phpVMS 7)"},
+                                                    "flights": {"type": "integer", "description": "The number of matching flights on the route"},
+                                                    "distance": {"type": "number", "description": "The shortest flight distance among them, in nautical miles"},
+                                                    "minimumFlightTime": {"type": "number", "description": "The shortest flight time among them, in hours, rounded to 2 decimals"},
+                                                    "maximumFlightTime": {"type": "number", "description": "The longest flight time among them, in hours, rounded to 2 decimals"}
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "400 - Missing departure",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "options": {
+                "summary": "Flight Destinations Capability",
+                "description": "Lets clients detect whether this API supports flight destinations. The response carries the X-SmartCARS-Capability header.",
+                "responses": {
+                    "200": {
+                        "description": "200 - Flight destinations are supported",
+                        "headers": {
+                            "X-SmartCARS-Capability": {
+                                "description": "Comma-separated list of capabilities of this route; contains flight-destinations and destination-routes",
+                                "schema": {
+                                    "type": "string",
+                                    "example": "flight-destinations,destination-routes"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/flights/search/arrivals": {
+            "post": {
+                "summary": "Search Flights",
+                "description": "Search for flights across three dimensions: any of several departure airports, optionally any of several arrival airports, and optionally any of several aircraft. Results are ordered by route distance (the great-circle distance between the two airports, shortest first; a flight whose airport has no coordinates (unset, or 0/0) comes last), then departure airport, then arrival airport, then flight id, so a route's flights are always adjacent. A page holds at most limit flights (250 at most). Without perArrivalLimit the search is paged: when more results follow, the X-SmartCARS-Next-Cursor header carries a cursor, sent back as cursor with the rest of the body unchanged to get the next page, and the totals headers count every matching flight across all pages. A client that ignores the headers gets the first page. When perArrivalLimit is given, at most that many flights are kept per arrival airport, in the same order, before the overall limit is applied; that answer is not paged, carries none of the three headers and ignores cursor. When the only-flights-from-current-airport setting is on, the pilot's current airport is used as the only departure, whatever the request says.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "departureAirports"
+                                ],
+                                "properties": {
+                                    "departureAirports": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "items": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z]{4}$"
+                                        },
+                                        "description": "The ICAO codes of the possible departure airports; unknown codes are ignored"
+                                    },
+                                    "arrivalAirports": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z]{4}$"
+                                        },
+                                        "description": "The ICAO codes of the possible arrival airports; unknown codes are ignored. When omitted or empty, every arrival is searched"
+                                    },
+                                    "aircraft": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "integer"
+                                        },
+                                        "description": "The ids of the aircraft; only flights whose subfleets contain one of them are returned. When omitted or empty, no aircraft filter applies"
+                                    },
+                                    "minimumFlightTime": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0
+                                    },
+                                    "maximumFlightTime": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0
+                                    },
+                                    "minimumDistance": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0
+                                    },
+                                    "maximumDistance": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0
+                                    },
+                                    "limit": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 250,
+                                        "default": 250,
+                                        "description": "The maximum number of flights on the page"
+                                    },
+                                    "perArrivalLimit": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "description": "The maximum number of flights to keep per arrival airport, taken in route distance order before limit is applied. Turns paging off"
+                                    },
+                                    "cursor": {
+                                        "type": "string",
+                                        "description": "The X-SmartCARS-Next-Cursor value of the previous page, to get the page after it. Opaque; it does not expire. Flights added or hidden between pages are neither skipped nor repeated among the remaining results. A change to an airport's coordinates between two page requests can move that route's flights. Ignored when perArrivalLimit is given"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "200 - Return a page of the available flights",
+                        "headers": {
+                            "X-SmartCARS-Next-Cursor": {"description": "Present when more results follow; send it back as cursor to get the next page. Absent on the last page and when perArrivalLimit is given.", "schema": {"type": "string"}},
+                            "X-SmartCARS-Total-Flights": {"description": "The number of flights matching the search, across all pages. Absent when perArrivalLimit is given.", "schema": {"type": "integer"}},
+                            "X-SmartCARS-Total-Routes": {"description": "The number of distinct departure and arrival airport pairs among the matching flights. Absent when perArrivalLimit is given.", "schema": {"type": "integer"}}
+                        },
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/SearchFlight"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "400 - Missing departureAirports, or a malformed cursor (message Invalid cursor)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "options": {
+                "summary": "Arrival Search Capability",
+                "description": "Lets clients detect whether this API supports arrival search. The response carries the X-SmartCARS-Capability header.",
+                "responses": {
+                    "200": {
+                        "description": "200 - Arrival search is supported",
+                        "headers": {
+                            "X-SmartCARS-Capability": {
+                                "description": "Comma-separated list of capabilities of this route; contains arrival-search",
+                                "schema": {
+                                    "type": "string",
+                                    "example": "arrival-search"
                                 }
                             }
                         }
@@ -243,7 +568,7 @@
                         }
                     },
                     "404": {
-                        "description": "404 - This flight ID does not exist",
+                        "description": "404 - This flight ID does not exist: Flight not found, code invalid_request",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -265,7 +590,7 @@
                         }
                     },
                     "409": {
-                        "description": "409 - A pilot already has this flight booked or the pilot has an existing booking",
+                        "description": "409 - phpVMS refuses the booking: the flight or the aircraft is already booked, or the pilot has reached the booking limit. The message is phpVMS's reason",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -328,8 +653,18 @@
                             }
                         }
                     },
+                    "404": {
+                        "description": "404 - No booking with this ID belongs to the calling pilot",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
                     "400": {
-                        "description": "400 - Invalid request data",
+                        "description": "400 - Invalid request data, or an aircraftID that does not exist (code invalid_request)",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -422,7 +757,7 @@
                                     },
                                     "type": {
                                         "type": "string",
-                                        "pattern": "^P|C$"
+                                        "description": "The flight type. A client sending a smartCARS/<major> User-Agent with major 4 or later gets the phpVMS flight type letter as stored (J, F, C, P, ...), which this backend announces with the iata-flight-types capability; any other client gets P (passenger) or C (cargo and everything else, scheduled cargo F included)"
                                     },
                                     "departureTime": {
                                         "type": "string",
@@ -496,6 +831,28 @@
                     },
                     "405": {
                         "description": "405 - The POST method was not used",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "422 - The aircraft does not exist (code invalid_request), or an airport phpVMS cannot find or add (code unknown_airport)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "409 - phpVMS refuses the booking: the aircraft is already booked, or the pilot has reached the booking limit. The message is phpVMS's reason",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -614,7 +971,18 @@
                         }
                     },
                     "404": {
-                        "description": "404 - Flight booking not found",
+                        "description": "404 - No booking with this ID belongs to the calling pilot: Booking not found, code booking_not_found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "409 - The flight cannot be started: no aircraft is attached to the bid, or phpVMS refuses to prefile it (aircraft not available, pilot not at the departure airport, ...). The message is phpVMS's reason",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -630,7 +998,7 @@
         "/flights/update": {
             "post": {
                 "summary": "Update Flight",
-                "description": "Update a booked or created flight",
+                "description": "Update a booked or created flight. An update for a flight that is no longer in progress or paused answers 200 and changes nothing",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -710,7 +1078,8 @@
                                     },
                                     "phase": {
                                         "type": "string",
-                                        "pattern": "^BOARDING|PUSH_BACK|TAXI|TAKE_OFF|REJECTED_TAKE_OFF|CLIMB_OUT|CLIMB|CRUISE|DESCENT|APPROACH|FINAL|LANDED|GO_AROUND|TAXI_TO_GATE|DEBOARDING|DIVERTED$"
+                                        "pattern": "^BOARDING|PRE_FLIGHT|PUSH_BACK|TAXI|TAXI_OUT|TAKE_OFF|REJECTED_TAKE_OFF|CLIMB_OUT|CLIMB|CRUISE|DESCENT|APPROACH|FINAL|LANDED|GO_AROUND|TAXI_TO_GATE|TAXI_IN|DEBOARDING|COMPLETE|DIVERTED$",
+                                        "description": "The flight phase: smartCARS 3's names, or the generic names PRE_FLIGHT, TAXI_OUT, TAXI_IN and COMPLETE (capability flight-phases) in place of BOARDING, TAXI, TAXI_TO_GATE and DEBOARDING. An empty or unknown value keeps the PIREP's current status"
                                     },
                                     "network": {
                                         "type": "string",
@@ -721,6 +1090,101 @@
                                     },
                                     "uuid": {
                                         "type": "string"
+                                    },
+                                    "paused": {
+                                        "type": "boolean",
+                                        "description": "Optional. true sets the PIREP status to paused (PSD) and keeps the PIREP in progress; false or missing maps phase as usual"
+                                    },
+                                    "ias": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Indicated airspeed in knots, stored as the position's IAS"
+                                    },
+                                    "verticalSpeed": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "description": "Optional. Vertical speed in feet per minute, negative when descending, stored as the position's vertical speed"
+                                    },
+                                    "altitudeAgl": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0,
+                                        "description": "Optional. Height above ground in feet, stored as the position's AGL altitude (altitude then gives the MSL altitude); without it both take altitude"
+                                    },
+                                    "distanceFlown": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Distance flown so far in nautical miles, stored as the position's and the PIREP's distance; without it the position's distance is the planned distance minus distanceRemaining"
+                                    },
+                                    "flightTime": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Flight time so far in decimal hours, stored as the PIREP's flight time; without it the flight time is the time since the first position"
+                                    },
+                                    "mach": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "description": "Optional. Mach number; accepted and not stored (phpVMS has no column for it)"
+                                    },
+                                    "headingTrue": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "description": "Optional. True heading in degrees, 0 to 360; accepted and not stored (heading stays the stored heading)"
+                                    },
+                                    "headingMagnetic": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "description": "Optional. Magnetic heading in degrees, 0 to 360; accepted and not stored"
+                                    },
+                                    "pitch": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "description": "Optional. Pitch in degrees, positive nose up; accepted and not stored"
+                                    },
+                                    "bank": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "description": "Optional. Bank in degrees; accepted and not stored"
+                                    },
+                                    "transponder": {
+                                        "type": "string",
+                                        "pattern": "^[0-7]{4}$",
+                                        "description": "Optional. The squawk code as 4 octal digits (e.g. 7000), stored as the position's transponder (acars.transponder, an integer column, so 0200 is stored as 200); any other value is ignored"
+                                    },
+                                    "autopilot": {
+                                        "type": "boolean",
+                                        "description": "Optional. Whether the autopilot is engaged, stored as the position's autopilot (acars.autopilot, a text column: 1 engaged, 0 not); a non-boolean value is ignored"
+                                    },
+                                    "fuelFlow": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0,
+                                        "description": "Optional. Total fuel flow of all engines in lbs per hour, stored as the position's fuel flow (acars.fuel_flow, in lbs per hour, phpVMS's internal fuel unit, whatever the VA's display unit), rounded to 2 decimals; a negative, non-finite or out-of-range value is ignored"
+                                    },
+                                    "fuel": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0,
+                                        "description": "Optional. Fuel on board in lbs, stored as the position's fuel (acars.fuel, in lbs, phpVMS's internal fuel unit, whatever the VA's display unit), rounded to 2 decimals; a negative, non-finite or out-of-range value is ignored"
+                                    },
+                                    "simTime": {
+                                        "type": "object",
+                                        "description": "Optional. The simulator's clock; zulu is stored as the position's sim time (acars.sim_time, YYYY-MM-DD HH:MM:SS), local is accepted and not stored. A zulu value not in the YYYY-MM-DDTHH:MM:SS form, or not a real date, is ignored",
+                                        "properties": {
+                                            "zulu": {
+                                                "type": "string",
+                                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$",
+                                                "description": "UTC sim time without offset, e.g. 2026-11-07T14:31:37"
+                                            },
+                                            "local": {
+                                                "type": "string",
+                                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$",
+                                                "description": "Local sim time without offset, same form; not stored"
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -834,7 +1298,7 @@
                         }
                     },
                     "404": {
-                        "description": "404 - Flight booking not found",
+                        "description": "404 - No booking with this ID belongs to the calling pilot: Booking not found, code booking_not_found",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -861,7 +1325,7 @@
         "/flights/cancel": {
             "post": {
                 "summary": "Cancel Flight",
-                "description": "Cancel an ongoing flight",
+                "description": "Cancel an ongoing flight. The unfiled PIREP is cancelled. With the `smartcars.cancel_mode` setting at `delete` it is then deleted together with its ACARS positions, logs and flight analyses, and a SimBrief OFP stays attached to the booked flight; at `cancel` (the default) it stays as a cancelled PIREP. Only the calling pilot's own PIREP is touched; a PIREP that is unknown, already cancelled or deleted, or owned by another pilot answers 200 as well, so the call can be repeated safely. In `delete` mode, a PIREP left in the cancelled state by an earlier call that failed part way is deleted on the next call.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -874,7 +1338,7 @@
                                 "properties": {
                                     "uuid": {
                                         "type": "string",
-                                        "format": "uuid"
+                                        "description": "The PIREP ID (a phpVMS hash ID)"
                                     },
                                     "bidID": {
                                         "oneOf": [
@@ -894,7 +1358,7 @@
                 },
                 "responses": {
                     "200": {
-                        "description": "200 - The flight was cancelled"
+                        "description": "200 - The flight was cancelled (and deleted in `delete` mode), or no such flight exists for this pilot"
                     },
                     "401": {
                         "description": "401 - Invalid session",
@@ -903,17 +1367,6 @@
                                 "schema": {
                                     "type": "object",
                                     "$ref": "#/components/schemas/UnauthorizedError"
-                                }
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "404 - Flight not found",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "$ref": "#/components/schemas/Error"
                                 }
                             }
                         }
@@ -928,6 +1381,307 @@
                                 }
                             }
                         }
+                    },
+                    "409": {
+                        "description": "409 - The PIREP has already been filed and is left untouched",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/flights/divert": {
+            "post": {
+                "summary": "Divert Flight",
+                "description": "Record a diversion on an ongoing flight using phpVMS's own diversion handling. The airport is stored in the PIREP's \"diversion-airport\" field and the PIREP status becomes DV; phpVMS then moves the aircraft and pilot to that airport when the PIREP is filed. A second call replaces the airport. Sending the booked arrival airport removes the diversion again and leaves the status as is; the next /flights/update sets it from the flight phase. While a diversion is recorded, /flights/update keeps the DV status during takeoff, climb, enroute, approach and landing. Only available when the phpVMS \"pireps.handle_diversion\" setting is on.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "uuid",
+                                    "airport"
+                                ],
+                                "properties": {
+                                    "uuid": {
+                                        "type": "string",
+                                        "description": "The PIREP ID (a phpVMS hash ID) of the ongoing flight"
+                                    },
+                                    "airport": {
+                                        "type": "string",
+                                        "description": "The phpVMS airport ID of the diversion airport, case-insensitive"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "200 - The diversion was recorded (or cleared)"
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "404 - No such flight for this pilot",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "409 - The flight is not in progress",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "422 - Unknown airport, or diversion handling is disabled for this VA",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "options": {
+                "summary": "Divert Capability",
+                "description": "Lets clients detect whether this API supports diversions. The X-SmartCARS-Capability header is only sent when the phpVMS \"pireps.handle_diversion\" setting is on.",
+                "responses": {
+                    "200": {
+                        "description": "200 - Diversions are supported when the header is present",
+                        "headers": {
+                            "X-SmartCARS-Capability": {
+                                "description": "Comma-separated list of capabilities of this route; contains divert only when diversion handling is enabled",
+                                "schema": {
+                                    "type": "string",
+                                    "example": "divert"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/flights/events": {
+            "post": {
+                "summary": "Flight Events",
+                "description": "Store flight log lines while the flight is in progress, before it is filed. Each line becomes a phpVMS ACARS log row (type LOG) of the PIREP, shown in the flight log on the PIREP page and in the admin, with the line's message (cut to 255 characters) and its timestamp as the row's time. The row ID is derived from the PIREP ID and the line's index, so the request is idempotent: a line sent again with an index already stored is ignored and the first stored text and time stay. At /flights/complete, a flightData item whose eventId matches an index already stored is not stored a second time; the other items are stored as before. A batch is checked as a whole: one invalid entry refuses the whole request and stores nothing. Expect a client to retry on any status other than those listed (a 500, for example): it sends the same lines again later.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "uuid",
+                                    "events"
+                                ],
+                                "properties": {
+                                    "uuid": {
+                                        "type": "string",
+                                        "description": "The PIREP ID (a phpVMS hash ID) of the ongoing flight"
+                                    },
+                                    "bidID": {
+                                        "oneOf": [
+                                            {
+                                                "type": "integer",
+                                                "format": "int32"
+                                            },
+                                            {
+                                                "type": "string"
+                                            }
+                                        ],
+                                        "description": "The booking of the flight; accepted but not used"
+                                    },
+                                    "events": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "maxItems": 100,
+                                        "description": "The log lines, at most 100 per request",
+                                        "items": {
+                                            "type": "object",
+                                            "required": [
+                                                "index",
+                                                "type",
+                                                "message",
+                                                "timestamp"
+                                            ],
+                                            "properties": {
+                                                "index": {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                    "description": "The line's 0-based position in the flight log, the same number the line has as eventId in the flightData filed with /flights/complete"
+                                                },
+                                                "type": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "info",
+                                                        "event",
+                                                        "comment"
+                                                    ],
+                                                    "description": "The kind of line; checked, not stored"
+                                                },
+                                                "message": {
+                                                    "type": "string",
+                                                    "description": "The line's text, the flightData item's message; may be empty. phpVMS's request middleware trims it and turns an empty or blank one into null, stored as null (no log text); otherwise stored cut to 255 characters"
+                                                },
+                                                "timestamp": {
+                                                    "type": "string",
+                                                    "description": "The line's UTC time, the flightData item's eventTimestamp (e.g. 2026-11-06 14:05:00z)"
+                                                },
+                                                "simTime": {
+                                                    "type": "object",
+                                                    "description": "Optional. The simulator's clock when the line was written; zulu is stored as the row's sim time (acars.sim_time, YYYY-MM-DD HH:MM:SS), local is accepted and not stored. A zulu value not in the YYYY-MM-DDTHH:MM:SS form, or not a real date, is ignored",
+                                                    "properties": {
+                                                        "zulu": {
+                                                            "type": "string",
+                                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$",
+                                                            "description": "UTC sim time without offset, e.g. 2026-11-07T14:31:37"
+                                                        },
+                                                        "local": {
+                                                            "type": "string",
+                                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$",
+                                                            "description": "Local sim time without offset, same form; not stored"
+                                                        }
+                                                    }
+                                                },
+                                                "timeIntoFlight": {
+                                                    "type": "number",
+                                                    "format": "float",
+                                                    "description": "Optional. Minutes since the flight started when the line was written; accepted and not stored"
+                                                },
+                                                "position": {
+                                                    "type": "object",
+                                                    "description": "Optional. Where the aircraft was when the line was written, stored as the row's lat, lon and altitude_msl when all three are finite numbers and latitude and longitude are in range; otherwise the row keeps phpVMS's default position (0, 0, 0) and the line is still stored. The row's altitude_agl is not filled",
+                                                    "properties": {
+                                                        "latitude": {
+                                                            "type": "number",
+                                                            "format": "float",
+                                                            "minimum": -90,
+                                                            "maximum": 90,
+                                                            "description": "Degrees"
+                                                        },
+                                                        "longitude": {
+                                                            "type": "number",
+                                                            "format": "float",
+                                                            "minimum": -180,
+                                                            "maximum": 180,
+                                                            "description": "Degrees"
+                                                        },
+                                                        "altitude": {
+                                                            "type": "number",
+                                                            "format": "float",
+                                                            "description": "Feet above mean sea level"
+                                                        }
+                                                    }
+                                                },
+                                                "variables": {
+                                                    "type": "object",
+                                                    "additionalProperties": true,
+                                                    "description": "Optional. Tracking values recorded for the line, keyed by variable name; accepted and not stored"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "200 - The lines were stored (lines already stored are left as they are)"
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "404 - No such flight for this pilot",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "409 - The flight is not in progress (already filed or cancelled)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "422 - events is not an array, is empty or has more than 100 entries, or an entry lacks an integer index >= 0, a type of info, event or comment, a message (a string, empty allowed) or a parseable timestamp",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "options": {
+                "summary": "Flight Events Capability",
+                "description": "Lets clients detect whether this API stores flight log lines during the flight.",
+                "responses": {
+                    "200": {
+                        "description": "200 - Flight events are supported when the header is present",
+                        "headers": {
+                            "X-SmartCARS-Capability": {
+                                "description": "Comma-separated list of capabilities of this route; contains flight-events",
+                                "schema": {
+                                    "type": "string",
+                                    "example": "flight-events"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -935,13 +1689,14 @@
         "/flights/complete": {
             "post": {
                 "summary": "Complete Flight",
-                "description": "Complete and file a PIREP for an ongoing flight",
+                "description": "Complete and file a PIREP for an ongoing flight. Only the calling pilot's own PIREP is filed. A PIREP that was already filed (pending, accepted or rejected) is left untouched and its ID is returned again, so the call can be repeated safely, including after a failure that happened once the PIREP was saved.",
                 "requestBody": {
                     "content": {
                         "application/json": {
                             "schema": {
                                 "type": "object",
                                 "required": [
+                                    "uuid",
                                     "bidID",
                                     "remainingLoad",
                                     "flightTime",
@@ -952,6 +1707,10 @@
                                     "flightData"
                                 ],
                                 "properties": {
+                                    "uuid": {
+                                        "type": "string",
+                                        "description": "The PIREP ID (a phpVMS hash ID) of the ongoing flight"
+                                    },
                                     "bidID": {
                                         "oneOf": [
                                             {
@@ -999,6 +1758,76 @@
                                     },
                                     "comments": {
                                         "type": "string"
+                                    },
+                                    "aircraft": {
+                                        "type": "integer",
+                                        "description": "Optional. The aircraft flown; when it differs from the PIREP's aircraft the PIREP takes it only if it exists, the pilot may fly its subfleet, it is parked and no other flight or pilot holds it (otherwise the PIREP keeps its aircraft). Fares are not regenerated"
+                                    },
+                                    "network": {
+                                        "type": "string",
+                                        "description": "Optional. The network flown on, stored as the PIREP's Network field value"
+                                    },
+                                    "simVersion": {
+                                        "type": "string",
+                                        "description": "Optional. The simulator and its version, stored as the PIREP's Simulator field value"
+                                    },
+                                    "score": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0,
+                                        "maximum": 100,
+                                        "description": "Optional. Flight score out of 100, stored rounded as the PIREP's score"
+                                    },
+                                    "cruiseLevel": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Cruise level in feet, stored rounded as the PIREP's flight level"
+                                    },
+                                    "blockFuel": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Fuel on board at off-block in lbs; without it the block fuel is read from the pushback log line"
+                                    },
+                                    "zfw": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Zero fuel weight in lbs"
+                                    },
+                                    "distanceFlown": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Distance flown in nautical miles; without it the distance is computed from the positions"
+                                    },
+                                    "blockTime": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "exclusiveMinimum": 0,
+                                        "description": "Optional. Block time (off-block to on-block) in decimal hours. Accepted and not stored: phpVMS has no block time column, blockOffTime and blockOnTime carry it"
+                                    },
+                                    "blockOffTime": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                        "description": "Optional. Off-block time, ISO 8601 UTC; without it the server time of the first airborne update stays. Ignored (the stored times kept) when it would fall after the on-block time, sent or stored"
+                                    },
+                                    "blockOnTime": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                        "description": "Optional. On-block time, ISO 8601 UTC; without it the server time of the landed update stays (or the filing time). Ignored (the stored times kept) when it would fall before the off-block time, sent or stored"
+                                    },
+                                    "passengers": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "description": "Optional. Passengers flown; replaces the PIREP's passenger fares, split over them in proportion to their capacity"
+                                    },
+                                    "cargo": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "minimum": 0,
+                                        "description": "Optional. Cargo flown in lbs (converted to kg when the VA's weight unit is kg); replaces the PIREP's cargo fares, split over them in proportion to their capacity"
                                     }
                                 }
                             }
@@ -1007,7 +1836,32 @@
                 },
                 "responses": {
                     "200": {
-                        "description": "200 - Flight was successfully finished"
+                        "description": "200 - Flight was successfully finished, or had already been filed",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "pirepID"
+                                    ],
+                                    "properties": {
+                                        "pirepID": {
+                                            "type": "string",
+                                            "description": "The ID of the filed PIREP"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": [
+                                                "accepted",
+                                                "pending",
+                                                "rejected"
+                                            ],
+                                            "description": "The PIREP's state once the filing is processed (a VA rule or the rank's auto-approve may accept or reject it at filing). Absent when the PIREP is in any other state"
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     },
                     "400": {
                         "description": "400 - Invalid type",
@@ -1032,7 +1886,7 @@
                         }
                     },
                     "404": {
-                        "description": "404 - Flight not found",
+                        "description": "404 - No such flight for this pilot",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1052,7 +1906,47 @@
                                 }
                             }
                         }
+                    },
+                    "422": {
+                        "description": "422 - flightData is not a base64 JSON array of events (code invalid_request)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "409 - The flight is neither in progress nor filed (cancelled, deleted or a draft)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
                     }
+                }
+            }
+        },
+        "/auto-update": {
+            "post": {
+                "summary": "Nudge from the smartCARS backend to run the module auto-update",
+                "description": "Sent by the smartCARS backend when a release of the module is published on GitHub, and once a day as a catch-up. The request is signed with a key only the smartCARS backend holds and verified against the public keys bundled in the module (Support/NudgeKeys.php); there is nothing to configure on the community's side. The body never decides what is installed: the queued update job asks GitHub for the latest published release (drafts and prereleases excluded) and installs that release's commit. Does nothing while the auto-update setting is off. Not called by the smartCARS app.",
+                "tags": ["Auto-update"],
+                "parameters": [
+                    {"name": "X-SmartCARS-Timestamp", "in": "header", "required": true, "schema": {"type": "string"}, "description": "Unix time in seconds; must be within 5 minutes of the server's clock"},
+                    {"name": "X-SmartCARS-Signature", "in": "header", "required": true, "schema": {"type": "string"}, "description": "Base64 RSA PKCS#1 v1.5 SHA-256 signature over <timestamp>.<raw body>"}
+                ],
+                "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"reason": {"type": "string", "enum": ["release", "daily"], "description": "Why the nudge was sent"}, "tag": {"type": ["string", "null"], "description": "The release tag that was published (null for the daily catch-up); a hint only"}}, "required": ["reason", "tag"]}}}},
+                "responses": {
+                    "200": {"description": "Auto-update is disabled (nothing done)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+                    "202": {"description": "Update queued", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+                    "401": {"description": "Invalid or stale timestamp (more than 5 minutes from the server's clock) or invalid signature", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+                    "429": {"description": "A nudge was accepted less than an hour ago", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
                 }
             }
         },
@@ -1060,7 +1954,7 @@
             "post": {
                 "security": [],
                 "summary": "Pilot Verify Session",
-                "description": "Verify a user session by providing the session ID with the database ID",
+                "description": "Verify a user session by providing the session ID with the database ID. Called by the smartCARS servers, which read only the body: a valid session answers the pilot as JSON, anything else an empty body",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1101,12 +1995,12 @@
                         }
                     },
                     "401": {
-                        "description": "401 - An incorrect or invalid session was given",
+                        "description": "401 - The session is unknown, or the pilot may not fly (pending, rejected, suspended or deleted). The body is empty: the smartCARS servers read any JSON body as a valid session",
                         "content": {
-                            "application/json": {
+                            "text/plain": {
                                 "schema": {
-                                    "type": "object",
-                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                    "type": "string",
+                                    "maxLength": 0
                                 }
                             }
                         }
@@ -1176,6 +2070,28 @@
                                 "schema": {
                                     "type": "object",
                                     "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "403 - The pilot was rejected (code pilot_rejected) or is suspended or deleted (code pilot_suspended)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "409 - The pilot is waiting for approval (code pilot_pending)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
                                 }
                             }
                         }
@@ -1253,7 +2169,7 @@
                         }
                     },
                     "401": {
-                        "description": "401 - The incorrect username or password was given",
+                        "description": "401 - The username or password is incorrect (an unknown user and a wrong password answer the same)",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1263,8 +2179,8 @@
                             }
                         }
                     },
-                    "404": {
-                        "description": "404 - The pilot with the username given was not found",
+                    "403": {
+                        "description": "403 - The pilot was rejected (code pilot_rejected) or is suspended or deleted (code pilot_suspended)",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1286,7 +2202,7 @@
                         }
                     },
                     "409": {
-                        "description": "409 - The pilot has not been confirmed into the airline",
+                        "description": "409 - The pilot is waiting for approval (code pilot_pending)",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1359,9 +2275,15 @@
             "get": {
                 "summary": "Get Airports",
                 "description": "Get all the available departures and destinations",
+                "parameters": [
+                    {"name": "If-None-Match", "in": "header", "required": false, "schema": {"type": "string"}, "description": "The ETag of the list the client already holds. When it matches the current list, the answer is 304 with no body."}
+                ],
                 "responses": {
                     "200": {
                         "description": "200 - Return a list of all available airports",
+                        "headers": {
+                            "ETag": {"description": "Identifies the exact body. Send it back as If-None-Match to skip an unchanged list.", "schema": {"type": "string"}}
+                        },
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1371,6 +2293,12 @@
                                     }
                                 }
                             }
+                        }
+                    },
+                    "304": {
+                        "description": "304 - The list is unchanged since the ETag sent in If-None-Match; the body is empty",
+                        "headers": {
+                            "ETag": {"description": "The ETag of the unchanged list.", "schema": {"type": "string"}}
                         }
                     },
                     "401": {
@@ -1391,9 +2319,15 @@
             "get": {
                 "summary": "Get Aircraft",
                 "description": "Get all the available aircraft",
+                "parameters": [
+                    {"name": "If-None-Match", "in": "header", "required": false, "schema": {"type": "string"}, "description": "The ETag of the list the client already holds. When it matches the current list, the answer is 304 with no body."}
+                ],
                 "responses": {
                     "200": {
                         "description": "200 - Return a list of all available aircraft",
+                        "headers": {
+                            "ETag": {"description": "Identifies the exact body. Send it back as If-None-Match to skip an unchanged list.", "schema": {"type": "string"}}
+                        },
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1403,6 +2337,12 @@
                                     }
                                 }
                             }
+                        }
+                    },
+                    "304": {
+                        "description": "304 - The list is unchanged since the ETag sent in If-None-Match; the body is empty",
+                        "headers": {
+                            "ETag": {"description": "The ETag of the unchanged list.", "schema": {"type": "string"}}
                         }
                     },
                     "401": {
@@ -1425,7 +2365,7 @@
                 "description": "Get the latest news",
                 "responses": {
                     "200": {
-                        "description": "200 - Return the most recent news from the community",
+                        "description": "200 - Return the most recent news from the community; all four fields are null when there is no news",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1448,7 +2388,9 @@
                                             "format": "date-time"
                                         },
                                         "postedBy": {
-                                            "type": "string"
+                                            "type": "string",
+                                            "nullable": true,
+                                            "description": "The author's private name (first name plus last initial); null when the author is unknown"
                                         }
                                     }
                                 }
@@ -1461,7 +2403,7 @@
         "/pireps/search": {
             "get": {
                 "summary": "Search PIREPs",
-                "description": "Search for PIREPs with the given filters",
+                "description": "Search the calling pilot's PIREPs with the given filters, all optional and combined. A filter that is empty or does not parse (a date not in YYYY-MM-DD form, an unknown status) is ignored, so it filters nothing. Only filed PIREPs (pending, accepted or rejected) are listed.",
                 "parameters": [
                     {
                         "in": "query",
@@ -1479,7 +2421,7 @@
                             "type": "string",
                             "pattern": "^[A-Z]{4}$"
                         },
-                        "description": "The ICAO code for the departure airport"
+                        "description": "The ICAO code for the arrival airport"
                     },
                     {
                         "in": "query",
@@ -1488,7 +2430,7 @@
                             "type": "string",
                             "format": "date"
                         },
-                        "description": "The date to start filtering from"
+                        "description": "The first submit date to include (inclusive)"
                     },
                     {
                         "in": "query",
@@ -1497,7 +2439,7 @@
                             "type": "string",
                             "format": "date"
                         },
-                        "description": "The date to end the filtering"
+                        "description": "The last submit date to include (inclusive)"
                     },
                     {
                         "in": "query",
@@ -1515,7 +2457,7 @@
                             "type": "string",
                             "pattern": "^[A-Z]{1}[A-Z0-9]{1,3}$"
                         },
-                        "description": "The aircraft used for the PIREP"
+                        "description": "The ICAO type of the aircraft used for the PIREP"
                     }
                 ],
                 "responses": {
@@ -1574,7 +2516,8 @@
                                             },
                                             "distance": {
                                                 "type": "number",
-                                                "format": "float"
+                                                "format": "float",
+                                                "description": "The distance flown in nautical miles; the planned distance when the flown distance is null or 0"
                                             },
                                             "flightType": {
                                                 "type": "string",
@@ -1609,9 +2552,127 @@
                                                 "type": "number",
                                                 "format": "float",
                                                 "minimum": 0
+                                            },
+                                            "score": {
+                                                "type": ["integer", "null"],
+                                                "minimum": 0,
+                                                "maximum": 100,
+                                                "description": "The score stored on the PIREP at filing, 0 to 100, or null when phpVMS holds none. Optional for a client."
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/pireps/latest": {
+            "get": {
+                "summary": "Get the latest PIREP",
+                "description": "The calling pilot's most recently created filed PIREP (pending, accepted or rejected), with the same fields as an entry of pireps/search, or an empty array when the pilot has none. Only smartCARS 3 calls it, for its suggested flights.",
+                "responses": {
+                    "200": {
+                        "description": "200 - The latest PIREP, or an empty array when the pilot has none",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "oneOf": [
+                                        {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {
+                                                    "type": "integer",
+                                                    "format": "int32",
+                                                    "minimum": 0
+                                                },
+                                                "submitDate": {
+                                                    "type": "string",
+                                                    "format": "date-time"
+                                                },
+                                                "airlineCode": {
+                                                    "type": "string",
+                                                    "pattern": "^[A-Z]{3}$"
+                                                },
+                                                "route": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string",
+                                                        "pattern": "^((0?[1-9]|[1-2]\\d|3[0-6])[LCR]?)|([A-Z]{5})|([A-Z]{3})|([A-Z]{1-3})$"
+                                                    }
+                                                },
+                                                "number": {
+                                                    "type": "string",
+                                                    "pattern": "^[A-Z0-9]{1,}$"
+                                                },
+                                                "distance": {
+                                                    "type": "number",
+                                                    "format": "float",
+                                                    "description": "The distance flown in nautical miles; the planned distance when the flown distance is null or 0"
+                                                },
+                                                "flightType": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "C",
+                                                        "P"
+                                                    ]
+                                                },
+                                                "departureAirport": {
+                                                    "type": "string",
+                                                    "pattern": "^[A-Z]{4}$"
+                                                },
+                                                "arrivalAirport": {
+                                                    "type": "string",
+                                                    "pattern": "^[A-Z]{4}$"
+                                                },
+                                                "aircraft": {
+                                                    "type": "string",
+                                                    "pattern": "^[A-Z]{1}[A-Z0-9]{1,3}$",
+                                                    "nullable": true
+                                                },
+                                                "status": {
+                                                    "type": "string",
+                                                    "pattern": "^Accepted|Pending|Rejected$"
+                                                },
+                                                "flightTime": {
+                                                    "type": "number",
+                                                    "format": "float",
+                                                    "minimum": 0
+                                                },
+                                                "landingRate": {
+                                                    "type": "number",
+                                                    "format": "float"
+                                                },
+                                                "fuelUsed": {
+                                                    "type": "number",
+                                                    "format": "float",
+                                                    "minimum": 0
+                                                },
+                                                "score": {
+                                                    "type": ["integer", "null"],
+                                                    "minimum": 0,
+                                                    "maximum": 100,
+                                                    "description": "The score stored on the PIREP at filing, 0 to 100, or null when phpVMS holds none. Optional for a client."
+                                                }
+                                            }
+                                        },
+                                        {
+                                            "type": "array",
+                                            "maxItems": 0
+                                        }
+                                    ]
                                 }
                             }
                         }
@@ -1667,6 +2728,7 @@
                                     "properties": {
                                         "flightLog": {
                                             "type": "array",
+                                            "description": "The flight log lines, each `<eventTimestamp> - <message>`, from the stored filed events when present",
                                             "items": {
                                                 "type": "string"
                                             }
@@ -1774,10 +2836,382 @@
                     }
                 }
             }
+        },
+        "/pireps/analyses": {
+            "post": {
+                "summary": "Upload Flight Analyses",
+                "description": "Store the smartCARS analyses of a finished flight (landing, flight score, takeoff, trails and debrief), replacing any earlier upload for the same PIREP. Only the calling pilot's own PIREPs are accepted. The payloads are stored as JSON in the sc_flight_analyses table; each part is stored exactly as sent (taken from the raw request body, so empty strings and empty objects survive) and returned the same way by /pireps/analyses/search; the touchdown rate, landing grade and blended flight score are also copied into their own columns. Cancelling a flight deletes its row. A signedLandingAnalysis or signedTakeoffAnalysis that passes every check (among others: a valid signature against the keys bundled in the module, a JSON object payload of version 1 for this kind and PIREP, the uploading pilot when the payload names an airline pilot, and an analysis that is an object) is stored in place of the unsigned landingAnalysis or takeoffAnalysis and marks it verified; the unsigned copy sent beside it is neither compared nor stored. A signed part that is missing, malformed or fails a check never fails the upload: the unsigned analysis is stored as sent and it is not verified; the reason is logged for a part that was sent (a missing part logs nothing). A well-formed signed part is stored as sent whether or not it verified.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "pirepID",
+                                    "formatVersion"
+                                ],
+                                "properties": {
+                                    "pirepID": {
+                                        "type": "string",
+                                        "description": "The PIREP ID (a phpVMS hash ID) the analyses belong to"
+                                    },
+                                    "formatVersion": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "example": 3,
+                                        "description": "Version of the payload format: 1 from smartCARS 3, 2 and 3 from smartCARS 4 (3 adds signedLandingAnalysis and signedTakeoffAnalysis)"
+                                    },
+                                    "signedLandingAnalysis": {
+                                        "oneOf": [
+                                            {
+                                                "$ref": "#/components/schemas/SignedAnalysis"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "signedTakeoffAnalysis": {
+                                        "oneOf": [
+                                            {
+                                                "$ref": "#/components/schemas/SignedAnalysis"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "landingAnalysis": {
+                                        "oneOf": [
+                                            {
+                                                "$ref": "#/components/schemas/LandingAnalysis"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "flightScore": {
+                                        "oneOf": [
+                                            {
+                                                "$ref": "#/components/schemas/FlightScore"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "approachTrail": {
+                                        "oneOf": [
+                                            {
+                                                "type": "array",
+                                                "items": {
+                                                    "$ref": "#/components/schemas/ApproachSample"
+                                                }
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "takeoffAnalysis": {
+                                        "oneOf": [
+                                            {
+                                                "$ref": "#/components/schemas/TakeoffAnalysis"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "takeoffTrail": {
+                                        "oneOf": [
+                                            {
+                                                "type": "array",
+                                                "items": {
+                                                    "$ref": "#/components/schemas/ApproachSample"
+                                                }
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "debrief": {
+                                        "oneOf": [
+                                            {
+                                                "$ref": "#/components/schemas/FlightDebrief"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "200 - The analyses were stored"
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "404 - The PIREP does not exist or is not the pilot's",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "422 - formatVersion is not an integer >= 0, or the body is not a JSON object",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "options": {
+                "summary": "Flight Analyses Capability",
+                "description": "Lets clients detect whether this API stores flight analyses. The response carries the X-SmartCARS-Capability header.",
+                "responses": {
+                    "200": {
+                        "description": "200 - Flight analyses are supported",
+                        "headers": {
+                            "X-SmartCARS-Capability": {
+                                "description": "Comma-separated list of capabilities of this route; contains flight-analyses and verified-analyses",
+                                "schema": {
+                                    "type": "string",
+                                    "example": "flight-analyses, verified-analyses"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/pireps/analyses/search": {
+            "post": {
+                "summary": "Search Flight Analyses",
+                "description": "Return the stored analyses for the given PIREPs. PIREPs that are not the calling pilot's or have no stored analyses are left out. For a part that verified at upload, landingAnalysis (takeoffAnalysis) is the signed analysis; signedLandingAnalysis and signedTakeoffAnalysis give the stored signed part with payload and signature exactly as sent, or null when none was stored. A signed part being present does not mean it verified: a well-formed part is stored whether or not its checks passed, and the verified flags are not part of the answer.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "pirepIDs"
+                                ],
+                                "properties": {
+                                    "pirepIDs": {
+                                        "type": "array",
+                                        "maxItems": 100,
+                                        "items": {
+                                            "type": "string",
+                                            "description": "A PIREP ID (a phpVMS hash ID)"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "200 - The stored analyses",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "required": [
+                                            "pirepID",
+                                            "formatVersion"
+                                        ],
+                                        "properties": {
+                                            "pirepID": {
+                                                "type": "string"
+                                            },
+                                            "formatVersion": {
+                                                "type": "integer"
+                                            },
+                                            "signedLandingAnalysis": {
+                                                "oneOf": [
+                                                    {
+                                                        "$ref": "#/components/schemas/SignedAnalysis"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            },
+                                            "signedTakeoffAnalysis": {
+                                                "oneOf": [
+                                                    {
+                                                        "$ref": "#/components/schemas/SignedAnalysis"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            },
+                                            "landingAnalysis": {
+                                                "oneOf": [
+                                                    {
+                                                        "$ref": "#/components/schemas/LandingAnalysis"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            },
+                                            "flightScore": {
+                                                "oneOf": [
+                                                    {
+                                                        "$ref": "#/components/schemas/FlightScore"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            },
+                                            "approachTrail": {
+                                                "oneOf": [
+                                                    {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "$ref": "#/components/schemas/ApproachSample"
+                                                        }
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            },
+                                            "takeoffAnalysis": {
+                                                "oneOf": [
+                                                    {
+                                                        "$ref": "#/components/schemas/TakeoffAnalysis"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            },
+                                            "takeoffTrail": {
+                                                "oneOf": [
+                                                    {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "$ref": "#/components/schemas/ApproachSample"
+                                                        }
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            },
+                                            "debrief": {
+                                                "oneOf": [
+                                                    {
+                                                        "$ref": "#/components/schemas/FlightDebrief"
+                                                    },
+                                                    {
+                                                        "type": "null"
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "401 - Invalid session",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/UnauthorizedError"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "422 - pirepIDs is missing or has more than 100 entries",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "options": {
+                "summary": "Flight Analyses Search Capability",
+                "description": "Lets clients detect whether this API stores flight analyses. The response carries the X-SmartCARS-Capability header.",
+                "responses": {
+                    "200": {
+                        "description": "200 - Flight analyses are supported",
+                        "headers": {
+                            "X-SmartCARS-Capability": {
+                                "description": "Comma-separated list of capabilities of this route; contains flight-analyses and verified-analyses",
+                                "schema": {
+                                    "type": "string",
+                                    "example": "flight-analyses, verified-analyses"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "components": {
         "schemas": {
+            "SignedAnalysis": {
+                "type": "object",
+                "description": "A signed analysis part as sent. Its presence in a stored row or a search answer does not mean it verified.",
+                "required": [
+                    "payload",
+                    "signature"
+                ],
+                "properties": {
+                    "payload": {
+                        "type": "string",
+                        "description": "The JSON text smartCARS signed, exactly as sent; it is never parsed and re-serialized before the signature is checked"
+                    },
+                    "signature": {
+                        "type": "string",
+                        "description": "Base64 RSASSA-PKCS1-v1_5 SHA-256 signature over the UTF-8 bytes of smartcars-analysis-v1. followed by payload"
+                    }
+                }
+            },
             "Error": {
                 "type": "object",
                 "required": [
@@ -1785,7 +3219,25 @@
                 ],
                 "properties": {
                     "message": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "The reason, readable by the pilot"
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "A stable code for the reason, sent with the refusals this module knows: aircraft_not_available, aircraft_not_at_airport, aircraft_not_allowed, pilot_not_at_airport, no_aircraft, flight_already_booked, aircraft_already_booked, booking_limit, booking_not_found, no_active_flight, flight_not_in_progress, flight_already_filed, diversion_disabled, unknown_airport, invalid_request, pilot_pending, pilot_rejected, pilot_suspended. Any route may send any code, and a backend may send codes outside this list, so a client falls back to the message for a code it does not know. Absent when the reason has no code"
+                    }
+                }
+            },
+            "Extensions": {
+                "type": "object",
+                "description": "The VA's own data, which the client keeps and passes on without using it. This module sends the phpVMS custom fields as fields, keyed by the field name, with each value as phpVMS stores it; a field without a value is left out. It is absent when nothing is left, and when its JSON text would exceed 16 KiB. A VA that customizes phpVMS or runs its own backend may send any other keys",
+                "additionalProperties": true,
+                "properties": {
+                    "fields": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        }
                     }
                 }
             },
@@ -1853,10 +3305,19 @@
                         "pattern": "^[A-Z]{1}[A-Z0-9]{1,3}$"
                     },
                     "name": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "With the `smartcars.aircraft_name` setting at `detailed` (the default): `name (registration) | status`; at `plain`: the aircraft name only"
+                    },
+                    "registration": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "The aircraft's registration, or null when it has none"
                     },
                     "serviceCeiling": {
-                        "type": "string"
+                        "type": "integer",
+                        "format": "int32",
+                        "nullable": true,
+                        "description": "Always null: phpVMS has no service ceiling for an aircraft"
                     },
                     "maximumPassengers": {
                         "type": "integer",
@@ -1869,7 +3330,20 @@
                         "minimum": 0
                     },
                     "minimumRank": {
-                        "type": "string"
+                        "type": "integer",
+                        "format": "int32",
+                        "nullable": true,
+                        "deprecated": true,
+                        "description": "Deprecated, still sent: restriction says whether the pilot may fly the aircraft. The lowest rank level (the 0-based position of a rank among the ranks ordered by hours, as rankLevel) that is allowed on the aircraft's subfleet; null when no rank is set on it"
+                    },
+                    "restriction": {
+                        "type": "string",
+                        "enum": [
+                            "rank",
+                            "type_rating"
+                        ],
+                        "nullable": true,
+                        "description": "Why the signed-in pilot may not fly the aircraft, following phpVMS's rank and type rating aircraft restriction settings: rank (the pilot's rank does not allow its subfleet) or type_rating (a type rating is missing); null when the pilot may fly it. A client treats any other value, or none, as allowed"
                     }
                 }
             },
@@ -1891,7 +3365,8 @@
                 "properties": {
                     "code": {
                         "type": "string",
-                        "pattern": "^[A-Z]{3}$"
+                        "pattern": "^[A-Z0-9]{2,3}$",
+                        "description": "The airline code: with the `smartcars.airline_code` setting at `iata` (the default) the IATA code, or the ICAO code when the airline has none; at `icao` the ICAO code"
                     },
                     "number": {
                         "type": "string",
@@ -1899,7 +3374,7 @@
                     },
                     "type": {
                         "type": "string",
-                        "pattern": "^P|C$"
+                        "description": "The flight type. A client sending a smartCARS/<major> User-Agent with major 4 or later gets the phpVMS flight type letter as stored (J, F, C, P, ...), which this backend announces with the iata-flight-types capability; any other client gets P (passenger) or C (cargo and everything else, scheduled cargo F included)"
                     },
                     "departureAirport": {
                         "type": "string",
@@ -1908,6 +3383,11 @@
                     "arrivalAirport": {
                         "type": "string",
                         "pattern": "^[A-Z]{4}$"
+                    },
+                    "alternateAirport": {
+                        "type": ["string", "null"],
+                        "pattern": "^[A-Z]{4}$",
+                        "description": "The alternate airport published on the flight, null when it has none"
                     },
                     "route": {
                         "type": "array",
@@ -1938,7 +3418,8 @@
                     "distance": {
                         "type": "number",
                         "format": "float",
-                        "minimum": 0
+                        "minimum": 0,
+                        "description": "The distance in nautical miles, whatever the VA's display unit"
                     },
                     "departureTime": {
                         "type": "string",
@@ -1955,6 +3436,7 @@
                     },
                     "daysOfWeek": {
                         "type": "array",
+                        "description": "The days the flight operates, Monday first; empty when the flight has no days set",
                         "items": {
                             "type": "string",
                             "pattern": "^Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday$"
@@ -1969,6 +3451,10 @@
                     },
                     "notes": {
                         "type": "string"
+                    },
+                    "extensions": {
+                        "$ref": "#/components/schemas/Extensions",
+                        "description": "The flight's custom field values (phpVMS flight fields)"
                     }
                 }
             },
@@ -2051,7 +3537,9 @@
                         "type": "string"
                     },
                     "rankLevel": {
-                        "type": "integer"
+                        "type": "integer",
+                        "deprecated": true,
+                        "description": "Deprecated, still sent: the 0-based position of the pilot's rank among the ranks ordered by hours. The aircraft's restriction says which aircraft the pilot may fly."
                     },
                     "rankImage": {
                         "type": "string",
@@ -2068,6 +3556,317 @@
                     "expiry": {
                         "type": "integer",
                         "format": "unix-time"
+                    },
+                    "extensions": {
+                        "$ref": "#/components/schemas/Extensions",
+                        "description": "The pilot's custom field values (phpVMS user fields), private fields included; inactive and internal fields are left out"
+                    }
+                }
+            },
+            "LandingAnalysis": {
+                "type": "object",
+                "description": "smartCARS landing analysis (LandingAnalysisSchema in the app). Stored as JSON; only the fields named here are read by this API, the rest is passed through.",
+                "required": [
+                    "runway",
+                    "touchdown",
+                    "overall"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                    "runway": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "properties": {
+                            "icao": {
+                                "type": "string"
+                            },
+                            "name": {
+                                "type": "string"
+                            },
+                            "endHeadingTrueDeg": {
+                                "type": "number"
+                            },
+                            "lengthM": {
+                                "type": "number"
+                            },
+                            "ldaM": {
+                                "type": "number",
+                                "description": "Landing distance available"
+                            },
+                            "displacedThresholdM": {
+                                "type": "number"
+                            },
+                            "surface": {
+                                "type": "string"
+                            },
+                            "surfaceCondition": {
+                                "type": "string",
+                                "enum": [
+                                    "unknown",
+                                    "normal",
+                                    "wet",
+                                    "icy",
+                                    "snow"
+                                ]
+                            },
+                            "sunElevationDeg": {
+                                "type": "number"
+                            },
+                            "elevationM": {
+                                "type": [
+                                    "number",
+                                    "null"
+                                ]
+                            }
+                        }
+                    },
+                    "touchdown": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "required": [
+                            "rateFpm"
+                        ],
+                        "properties": {
+                            "rateFpm": {
+                                "type": "number",
+                                "description": "Stored in sc_flight_analyses.touchdown_rate_fpm"
+                            },
+                            "firmestRateFpm": {
+                                "type": "number"
+                            },
+                            "gForce": {
+                                "type": "number"
+                            },
+                            "iasKt": {
+                                "type": "number"
+                            },
+                            "gsKt": {
+                                "type": "number"
+                            },
+                            "pitchDeg": {
+                                "type": "number"
+                            },
+                            "bankDeg": {
+                                "type": "number"
+                            },
+                            "distanceFromThresholdM": {
+                                "type": "number",
+                                "description": "Signed; negative = short of the (displaced) threshold"
+                            }
+                        }
+                    },
+                    "overall": {
+                        "type": "string",
+                        "enum": [
+                            "excellent",
+                            "good",
+                            "fair",
+                            "poor"
+                        ],
+                        "description": "Stored in sc_flight_analyses.landing_grade"
+                    }
+                }
+            },
+            "FlightScore": {
+                "type": "object",
+                "description": "smartCARS flight score (FlightScoreSchema in the app): rule deductions plus the landing blend.",
+                "required": [
+                    "initial",
+                    "current",
+                    "penalties",
+                    "reliableFields",
+                    "landingPct",
+                    "blended"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                    "initial": {
+                        "type": "number"
+                    },
+                    "current": {
+                        "type": "number",
+                        "description": "initial minus every deduction, at least 0"
+                    },
+                    "penalties": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "reliableFields": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "landingPct": {
+                        "type": [
+                            "number",
+                            "null"
+                        ],
+                        "description": "Landing performance out of 100; null before the landing is scored"
+                    },
+                    "blended": {
+                        "type": "number",
+                        "description": "60% flight score + 40% landing performance. Stored in sc_flight_analyses.flight_score"
+                    }
+                }
+            },
+            "ApproachSample": {
+                "type": "object",
+                "description": "One sample of the approach or takeoff trail (ApproachSampleSchema in the app).",
+                "additionalProperties": true,
+                "properties": {
+                    "elapsedTimeSec": {
+                        "type": "number"
+                    },
+                    "latLon": {
+                        "type": "object",
+                        "properties": {
+                            "latitude": {
+                                "type": "number"
+                            },
+                            "longitude": {
+                                "type": "number"
+                            }
+                        }
+                    },
+                    "altAglFt": {
+                        "type": "number"
+                    },
+                    "altMslFt": {
+                        "type": "number"
+                    },
+                    "pitchDeg": {
+                        "type": "number"
+                    },
+                    "bankDeg": {
+                        "type": "number"
+                    },
+                    "vsFpm": {
+                        "type": "number"
+                    },
+                    "iasKt": {
+                        "type": "number"
+                    },
+                    "gsKt": {
+                        "type": "number"
+                    },
+                    "headingTrue": {
+                        "type": "number"
+                    },
+                    "headingMag": {
+                        "type": "number"
+                    },
+                    "onGround": {
+                        "type": "boolean"
+                    },
+                    "gForce": {
+                        "type": "number"
+                    },
+                    "windDirDeg": {
+                        "type": "number"
+                    },
+                    "windSpdKt": {
+                        "type": "number"
+                    }
+                }
+            },
+            "TakeoffAnalysis": {
+                "type": "object",
+                "description": "smartCARS takeoff analysis (TakeoffAnalysisSchema in the app). Stored as JSON and passed through.",
+                "additionalProperties": true,
+                "properties": {
+                    "window": {
+                        "type": "object",
+                        "properties": {
+                            "startElapsedSec": {
+                                "type": "number"
+                            },
+                            "endElapsedSec": {
+                                "type": "number"
+                            }
+                        }
+                    },
+                    "runway": {
+                        "type": [
+                            "object",
+                            "null"
+                        ],
+                        "additionalProperties": true
+                    }
+                }
+            },
+            "FlightDebrief": {
+                "type": "object",
+                "description": "smartCARS flight debrief record (FlightDebriefRecordSchema in the app). Stored as JSON and passed through.",
+                "required": [
+                    "version",
+                    "source",
+                    "story"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                    "version": {
+                        "type": "integer",
+                        "enum": [
+                            1
+                        ]
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "'tracker' or 'pirep'"
+                    },
+                    "derivationVersion": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
+                    },
+                    "story": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "departure": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "arrival": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "aircraft": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "flight": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "distanceNm": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
+                    },
+                    "blockTimeSec": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
+                    },
+                    "airTimeSec": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
+                    },
+                    "fuelUsedLbs": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
                     }
                 }
             }

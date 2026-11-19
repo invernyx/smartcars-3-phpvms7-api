@@ -4,6 +4,7 @@ namespace Modules\SmartCARS3phpVMS7Api\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Modules\SmartCARS3phpVMS7Api\Support\Capabilities;
 
 /**
  * Class SCAuth
@@ -36,6 +37,10 @@ class SCHeaders
             'Access-Control-Allow-Headers' => 'Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With',
             'Access-Control-Allow-Origin' => '*'
         ]);
+        $capabilities = Capabilities::allowed($request->route()?->defaults ?? []);
+        if (!empty($capabilities)) {
+            $response->headers->set('X-SmartCARS-Capability', implode(', ', $capabilities));
+        }
         return $response;
 
     }
