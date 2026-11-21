@@ -1,7 +1,7 @@
 {
     "openapi": "3.1.0",
     "info": {
-        "version": "2.0.0",
+        "version": "2.0.1",
         "title": "smartCARS Public API"
     },
     "paths": {
@@ -2211,6 +2211,17 @@
                                 }
                             }
                         }
+                    },
+                    "429": {
+                        "description": "429 - Too many failed sign-ins for the account in the last minute (code too_many_attempts), answered until the minute is over, even with the right password",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3224,7 +3235,7 @@
                     },
                     "code": {
                         "type": "string",
-                        "description": "A stable code for the reason, sent with the refusals this module knows: aircraft_not_available, aircraft_not_at_airport, aircraft_not_allowed, pilot_not_at_airport, no_aircraft, flight_already_booked, aircraft_already_booked, booking_limit, booking_not_found, no_active_flight, flight_not_in_progress, flight_already_filed, diversion_disabled, unknown_airport, invalid_request, pilot_pending, pilot_rejected, pilot_suspended. Any route may send any code, and a backend may send codes outside this list, so a client falls back to the message for a code it does not know. Absent when the reason has no code"
+                        "description": "A stable code for the reason, sent with the refusals this module knows: aircraft_not_available, aircraft_not_at_airport, aircraft_not_allowed, pilot_not_at_airport, no_aircraft, flight_already_booked, aircraft_already_booked, booking_limit, booking_not_found, no_active_flight, flight_not_in_progress, flight_already_filed, diversion_disabled, unknown_airport, invalid_request, pilot_pending, pilot_rejected, pilot_suspended, too_many_attempts. Every secured route also refuses a pilot who may no longer fly: 409 pilot_pending, 403 pilot_rejected, 403 pilot_suspended. Any route may send any code, and a backend may send codes outside this list, so a client falls back to the message for a code it does not know. Absent when the reason has no code"
                     }
                 }
             },
@@ -3875,7 +3886,8 @@
             "bearerAuth": {
                 "type": "http",
                 "scheme": "bearer",
-                "bearerFormat": "session"
+                "bearerFormat": "session",
+                "description": "The session from pilot/login or pilot/resume. Every route secured with it checks the pilot's state on each request and refuses a pilot who may no longer fly with an Error body: 409 with code pilot_pending (waiting for approval), 403 with code pilot_rejected (rejected) or 403 with code pilot_suspended (suspended, or any other state that is not active). A session whose pilot was deleted answers 401 Invalid Token"
             }
         }
     },

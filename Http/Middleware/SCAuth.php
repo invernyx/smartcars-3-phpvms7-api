@@ -7,6 +7,7 @@ use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Modules\SmartCARS3phpVMS7Api\Support\PilotState;
 
 /**
  * Class SCAuth
@@ -33,6 +34,9 @@ class SCAuth
         //dd($model);
         if (!is_null($model))
         {
+            if (($refusal = PilotState::refusal($model)) !== null) {
+                return $refusal;
+            }
             Auth::setUser($model);
             $request->attributes->add(['pilotID' => $model->id]);
             return $next($request);

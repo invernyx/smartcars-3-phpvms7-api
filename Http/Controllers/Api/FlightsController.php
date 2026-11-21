@@ -42,6 +42,7 @@ use App\Services\FlightService;
 use App\Services\PirepService;
 use App\Services\UserService;
 use Carbon\Carbon;
+use Illuminate\Database\DetectsConcurrencyErrors;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -60,6 +61,8 @@ use Modules\SmartCARS3phpVMS7Api\Support\ScSettings;
  */
 class FlightsController extends Controller
 {
+    use DetectsConcurrencyErrors;
+
     private const SEARCH_LIMIT = 250;
     private const ARRIVAL_SEARCH_LIMIT = 250;
     private const DESTINATION_ROUTES_LIMIT = 2000;
@@ -131,6 +134,7 @@ class FlightsController extends Controller
         PirepState::PENDING  => 'pending',
         PirepState::REJECTED => 'rejected',
     ];
+    private const COMPLETE_TRANSACTION_ATTEMPTS = 3;
 
     public function __construct(
         public FlightService $flightService,
@@ -153,7 +157,7 @@ class FlightsController extends Controller
         if ($flight === null) {
             return $this->refusal('Flight not found', 'invalid_request', 404);
         }
-        $user = User::find($request->get('pilotID'));
+        $user = Auth::user();
         $aircraftId = $request->input('aircraftID');
         $aircraft = null;
         if ($aircraftId !== null) {
@@ -245,7 +249,7 @@ class FlightsController extends Controller
     }
     public function bookings(Request $request)
     {
-        $user = User::find($request->get('pilotID'));
+        $user = Auth::user();
         $bids = $this->bidService->findBidsForUser($user);
         $bids->load('flight', 'flight.subfleets', 'flight.subfleets.aircraft', 'flight.field_values');
         $output = [];
@@ -304,32 +308,35 @@ class FlightsController extends Controller
     }
     public function cancel(Request $request)
     {
-        $pirep = Pirep::where(['id' => $request->input('uuid'), 'user_id' => Auth::id()])->first();
-        if ($pirep === null) {
-            return response()->json(['status' => 200]);
-        }
-        if (!in_array($pirep->state, [PirepState::IN_PROGRESS, PirepState::PAUSED, PirepState::CANCELLED], true)) {
-            return $this->refusal('This flight has already been filed', 'flight_already_filed', 409);
-        }
+        // The lock waits for a filing in progress, so a discard sent after a timed-out complete sees the filed state
+        return DB::transaction(function () use ($request) {
+            $pirep = Pirep::where(['id' => $request->input('uuid'), 'user_id' => Auth::id()])->lockForUpdate()->first();
+            if ($pirep === null) {
+                return response()->json(['status' => 200]);
+            }
+            if (!in_array($pirep->state, [PirepState::IN_PROGRESS, PirepState::PAUSED, PirepState::CANCELLED], true)) {
+                return $this->refusal('This flight has already been filed', 'flight_already_filed', 409);
+            }
 
-        // A CANCELLED one is a retry: phpVMS refuses to cancel it twice
-        if ($pirep->state !== PirepState::CANCELLED) {
-            $this->pirepService->cancel($pirep);
-        }
-        if (!ScSettings::isCancelDelete()) {
-            return response()->json(['status' => 200]);
-        }
+            // A CANCELLED one is a retry: phpVMS refuses to cancel it twice
+            if ($pirep->state !== PirepState::CANCELLED) {
+                $this->pirepService->cancel($pirep);
+            }
+            if (!ScSettings::isCancelDelete()) {
+                return response()->json(['status' => 200]);
+            }
 
-        DB::transaction(function () use ($pirep) {
-            // Keep flight_id so the OFP stays on the booked flight
-            SimBrief::where('pirep_id', $pirep->id)->update(['pirep_id' => null]);
-            Acars::where('pirep_id', $pirep->id)->delete();
-            PirepLog::where('pirep_id', $pirep->id)->delete();
-            FlightAnalysis::where('pirep_id', $pirep->id)->delete();
-            $this->pirepService->delete($pirep);
+            DB::transaction(function () use ($pirep) {
+                // Keep flight_id so the OFP stays on the booked flight
+                SimBrief::where('pirep_id', $pirep->id)->update(['pirep_id' => null]);
+                Acars::where('pirep_id', $pirep->id)->delete();
+                PirepLog::where('pirep_id', $pirep->id)->delete();
+                FlightAnalysis::where('pirep_id', $pirep->id)->delete();
+                $this->pirepService->delete($pirep);
+            });
+
+            return response()->json(['status' => 200]);
         });
-
-        return response()->json(['status' => 200]);
     }
     public function divert(Request $request)
     {
@@ -486,7 +493,6 @@ class FlightsController extends Controller
     public function charter(Request $request)
     {
         $flight_num = $request->number;
-        Log::debug($request->all());
         $aircraft = is_numeric($request->aircraft) ? Aircraft::find((int) $request->aircraft) : null;
         if ($aircraft === null) {
             return $this->refusal('Aircraft '.$request->aircraft.' not found', 'invalid_request', 422);
@@ -562,128 +568,139 @@ class FlightsController extends Controller
     }
     public function complete(Request $request)
     {
-        $pirep = Pirep::where(['id' => $request->input('uuid'), 'user_id' => Auth::id()])->first();
-        if ($pirep === null) {
-            return $this->refusal('No active flight', 'no_active_flight', 404);
-        }
-        // A retry after a failure past the save must not log the flight a second time
-        if (in_array($pirep->state, [PirepState::PENDING, PirepState::ACCEPTED, PirepState::REJECTED], true)) {
+        return DB::transaction(function () use ($request) {
+            $pirep = Pirep::where(['id' => $request->input('uuid'), 'user_id' => Auth::id()])->lockForUpdate()->first();
+            if ($pirep === null) {
+                return $this->refusal('No active flight', 'no_active_flight', 404);
+            }
+            // A retry after a lost response, or a duplicate call that waited on the lock, gets the filed answer
+            if (in_array($pirep->state, [PirepState::PENDING, PirepState::ACCEPTED, PirepState::REJECTED], true)) {
+                return response()->json($this->filedAnswer($pirep));
+            }
+            if (!in_array($pirep->state, [PirepState::IN_PROGRESS, PirepState::PAUSED], true)) {
+                return $this->refusal('This flight is not in progress', 'flight_not_in_progress', 409);
+            }
+
+            $input = $request->all();
+            $input['flightLog'] = $input['flightLog'] ?? null;
+            $input['flightData'] = $input['flightData'] ?? null;
+            if (gettype($input['flightLog']) === "string") {
+                $input['flightLog'] = base64_decode($input['flightLog'], true);
+                $input['flightLog'] = explode("\n", $input['flightLog']);
+                //logger("Flight Log");
+                //logger($input['flightLog']);
+            }
+            if (gettype($input['flightData']) === "string") {
+                $input['flightData'] = base64_decode($input['flightData'], true);
+                $input['flightData'] = json_decode($input['flightData'], true);
+                //logger("Flight Data");
+                //logger($input['flightData']);
+            }
+            // A retry gets the same answer, so a body that cannot be read is refused rather than failing with a 500
+            if (!is_array($input['flightData']) || !array_is_list($input['flightData'])) {
+                return $this->refusal('flightData must be a base64 JSON array of events', 'invalid_request', 422);
+            }
+
+            //Log::debug("Found Pirep to close out");
+            $pirep->status = PirepStatus::ARRIVED;
+            $pirep->state = PirepState::PENDING;
+            $pirep->source = PirepSource::ACARS;
+            $pirep->source_name = $this->sourceName($request);
+            $pirep->landing_rate = $input['landingRate'];
+            $pirep->fuel_used = $input['fuelUsed'];
+            $pirep->flight_time = $input['flightTime'] * 60;
+            $pirep->route = $input['route'] ? join(" ", $input['route']) : '';
+            $pirep->submitted_at = Carbon::now('UTC');
+            $storedLogIds = Acars::where(['pirep_id' => $pirep->id, 'type' => AcarsType::LOG])->pluck('id')->flip();
+            $acarsSource = $this->acarsSource($request);
+            foreach ($input['flightData'] as $data) {
+                // A line already stored by flights/events keeps its row
+                $eventId = $this->flightEventId($pirep->id, $data['eventId'] ?? null);
+                if ($eventId === null || !$storedLogIds->has($eventId)) {
+                    $log_item = new Acars();
+                    $log_item->type = AcarsType::LOG;
+                    $log_item->log = $data['message'];
+                    $log_item->created_at = Carbon::createFromTimeString($data['eventTimestamp']);
+                    $log_item->source = $acarsSource;
+                    $pirep->acars_logs()->save($log_item);
+                }
+                // hotfix for block fuel. Replace this code when block fuel is properly implemented in smartCARS
+                if (str_contains($data['message'], "Pushing back with")) {
+                    // example: "Pushing back with 1000 lbs of fuel"
+                    // extract the number and units
+                    //logger($data['message']);
+                    preg_match('/Pushing back with (\d+) (\w+) of fuel/', $data['message'], $matches);
+                    // check if we have 3 matches
+                    if (count($matches) !== 3) {
+                        continue;
+                    }
+                    //logger($matches);
+                    $fuel_amount = intval($matches[1]);
+                    $fuel_units = $matches[2];
+                    // Convert kg to lbs if necessary
+                    if (strtolower($fuel_units) === 'kgs') {
+                        $fuel_amount = $fuel_amount * 2.20462; // 1 kg = 2.20462 lbs
+                    }
+                    $pirep->block_fuel = $fuel_amount;
+                }
+            }
+            if (!is_null($input['comments'] ?? null)) {
+                foreach ($input['flightLog'] as $comment) {
+                    if (str_contains($comment, " Comment:")) {
+                        $pirep->comments()->create([
+                            'user_id' => Auth::user()->id,
+                            'comment' => $comment
+                        ]);
+                    }
+                }
+            }
+            // Now the raw data
+            PirepLog::create([
+                'pirep_id' => $pirep->id,
+                'log'      => gzencode(json_encode($input['flightData']))
+            ]);
+            $distanceFlown = $this->positiveNumber($input['distanceFlown'] ?? null);
+            $pirep->distance = $distanceFlown ?? PirepDistanceCalculation::calculatePirepDistance($pirep);
+            $this->applyFiledValues($pirep, $input);
+            try {
+                $this->applyAircraftChange($pirep, $input['aircraft'] ?? null);
+            } catch (\Throwable $e) {
+                $this->rethrowConcurrencyError($e);
+                Log::error('smartCARS: could not check the aircraft change of PIREP '.$pirep->id.': '.$e->getMessage());
+            }
+            $pirep->save();
+            // The PIREP is already saved as pending: a failure here must not stop the submit below
+            try {
+                $this->applyFiledLoads($pirep, $input);
+            } catch (\Throwable $e) {
+                $this->rethrowConcurrencyError($e);
+                Log::error('smartCARS: could not save the filed loads of PIREP '.$pirep->id.': '.$e->getMessage());
+            }
+            try {
+                $this->saveFiledFields($pirep, $input);
+            } catch (\Throwable $e) {
+                $this->rethrowConcurrencyError($e);
+                Log::error('smartCARS: could not save the fields of PIREP '.$pirep->id.': '.$e->getMessage());
+            }
+            try {
+                if (!Acars::where(['pirep_id' => $pirep->id, 'type' => AcarsType::ROUTE])->exists()) {
+                    $this->pirepService->saveRoute($pirep);
+                }
+            } catch (\Throwable $e) {
+                $this->rethrowConcurrencyError($e);
+                Log::error('smartCARS: could not save the route of PIREP '.$pirep->id.': '.$e->getMessage());
+            }
+            $this->pirepService->submit($pirep);
+            // A VA's PirepFiled listener or the rank's auto-approve may have changed the state during submit
+            $pirep->refresh();
             return response()->json($this->filedAnswer($pirep));
+        }, self::COMPLETE_TRANSACTION_ATTEMPTS);
+    }
+    private function rethrowConcurrencyError(\Throwable $e): void
+    {
+        if ($this->causedByConcurrencyError($e)) {
+            throw $e;
         }
-        if (!in_array($pirep->state, [PirepState::IN_PROGRESS, PirepState::PAUSED], true)) {
-            return $this->refusal('This flight is not in progress', 'flight_not_in_progress', 409);
-        }
-
-        $input = $request->all();
-        $input['flightLog'] = $input['flightLog'] ?? null;
-        $input['flightData'] = $input['flightData'] ?? null;
-        if (gettype($input['flightLog']) === "string") {
-            $input['flightLog'] = base64_decode($input['flightLog'], true);
-            $input['flightLog'] = explode("\n", $input['flightLog']);
-            //logger("Flight Log");
-            //logger($input['flightLog']);
-        }
-        if (gettype($input['flightData']) === "string") {
-            $input['flightData'] = base64_decode($input['flightData'], true);
-            $input['flightData'] = json_decode($input['flightData'], true);
-            //logger("Flight Data");
-            //logger($input['flightData']);
-        }
-        // A retry gets the same answer, so a body that cannot be read is refused rather than failing with a 500
-        if (!is_array($input['flightData']) || !array_is_list($input['flightData'])) {
-            return $this->refusal('flightData must be a base64 JSON array of events', 'invalid_request', 422);
-        }
-
-        //Log::debug("Found Pirep to close out");
-        $pirep->status = PirepStatus::ARRIVED;
-        $pirep->state = PirepState::PENDING;
-        $pirep->source = PirepSource::ACARS;
-        $pirep->source_name = $this->sourceName($request);
-        $pirep->landing_rate = $input['landingRate'];
-        $pirep->fuel_used = $input['fuelUsed'];
-        $pirep->flight_time = $input['flightTime'] * 60;
-        $pirep->route = $input['route'] ? join(" ", $input['route']) : '';
-        $pirep->submitted_at = Carbon::now('UTC');
-        $storedLogIds = Acars::where(['pirep_id' => $pirep->id, 'type' => AcarsType::LOG])->pluck('id')->flip();
-        $acarsSource = $this->acarsSource($request);
-        foreach ($input['flightData'] as $data) {
-            // A line already stored by flights/events keeps its row
-            $eventId = $this->flightEventId($pirep->id, $data['eventId'] ?? null);
-            if ($eventId === null || !$storedLogIds->has($eventId)) {
-                $log_item = new Acars();
-                $log_item->type = AcarsType::LOG;
-                $log_item->log = $data['message'];
-                $log_item->created_at = Carbon::createFromTimeString($data['eventTimestamp']);
-                $log_item->source = $acarsSource;
-                $pirep->acars_logs()->save($log_item);
-            }
-            // hotfix for block fuel. Replace this code when block fuel is properly implemented in smartCARS
-            if (str_contains($data['message'], "Pushing back with")) {
-                // example: "Pushing back with 1000 lbs of fuel"
-                // extract the number and units
-                //logger($data['message']);
-                preg_match('/Pushing back with (\d+) (\w+) of fuel/', $data['message'], $matches);
-                // check if we have 3 matches
-                if (count($matches) !== 3) {
-                    continue;
-                }
-                //logger($matches);
-                $fuel_amount = intval($matches[1]);
-                $fuel_units = $matches[2];
-                // Convert kg to lbs if necessary
-                if (strtolower($fuel_units) === 'kgs') {
-                    $fuel_amount = $fuel_amount * 2.20462; // 1 kg = 2.20462 lbs
-                }
-                $pirep->block_fuel = $fuel_amount;
-            }
-        }
-        if (!is_null($input['comments'] ?? null)) {
-            foreach ($input['flightLog'] as $comment) {
-                if (str_contains($comment, " Comment:")) {
-                    $pirep->comments()->create([
-                        'user_id' => Auth::user()->id,
-                        'comment' => $comment
-                    ]);
-                }
-            }
-        }
-        // Now the raw data
-        PirepLog::create([
-            'pirep_id' => $pirep->id,
-            'log'      => gzencode(json_encode($input['flightData']))
-        ]);
-        $distanceFlown = $this->positiveNumber($input['distanceFlown'] ?? null);
-        $pirep->distance = $distanceFlown ?? PirepDistanceCalculation::calculatePirepDistance($pirep);
-        $this->applyFiledValues($pirep, $input);
-        try {
-            $this->applyAircraftChange($pirep, $input['aircraft'] ?? null);
-        } catch (\Throwable $e) {
-            Log::error('smartCARS: could not check the aircraft change of PIREP '.$pirep->id.': '.$e->getMessage());
-        }
-        $pirep->save();
-        // The PIREP is already saved as pending: a failure here must not stop the submit below
-        try {
-            $this->applyFiledLoads($pirep, $input);
-        } catch (\Throwable $e) {
-            Log::error('smartCARS: could not save the filed loads of PIREP '.$pirep->id.': '.$e->getMessage());
-        }
-        try {
-            $this->saveFiledFields($pirep, $input);
-        } catch (\Throwable $e) {
-            Log::error('smartCARS: could not save the fields of PIREP '.$pirep->id.': '.$e->getMessage());
-        }
-        try {
-            if (!Acars::where(['pirep_id' => $pirep->id, 'type' => AcarsType::ROUTE])->exists()) {
-                $this->pirepService->saveRoute($pirep);
-            }
-        } catch (\Throwable $e) {
-            Log::error('smartCARS: could not save the route of PIREP '.$pirep->id.': '.$e->getMessage());
-        }
-        $this->pirepService->submit($pirep);
-        // A VA's PirepFiled listener or the rank's auto-approve may have changed the state during submit
-        $pirep->refresh();
-        return response()->json($this->filedAnswer($pirep));
-
     }
     private function filedStatus(Pirep $pirep): ?string
     {
@@ -1326,7 +1343,6 @@ class FlightsController extends Controller
     {
         $user = Auth::user();
         $bid = Bid::where(['id' => $request->input('bidID'), 'user_id' => Auth::id()])->first();
-        logger($request->all());
         if ($bid === null) {
             return $this->refusal('Booking not found', 'booking_not_found', 404);
         }
@@ -1384,7 +1400,7 @@ class FlightsController extends Controller
     public function unbook(Request $request)
     {
 
-        $bid = Bid::where(['user_id' => $request->get('pilotID'), 'id' => $request->post('bidID')])->first();
+        $bid = Bid::where(['user_id' => Auth::id(), 'id' => $request->post('bidID')])->first();
         if ($bid === null) {
             return $this->refusal('Booking not found', 'booking_not_found', 404);
         }

@@ -4,14 +4,15 @@ namespace Modules\SmartCARS3phpVMS7Api\Http\Controllers\Api;
 
 use App\Contracts\Controller;
 use App\Models\Enums\PirepState;
-use App\Models\Enums\UserState;
 use App\Models\Rank;
 use App\Models\User;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
 use Modules\SmartCARS3phpVMS7Api\Support\FieldExtensions;
+use Modules\SmartCARS3phpVMS7Api\Support\PilotState;
 use Modules\SmartCARS3phpVMS7Api\Support\RankLevel;
 
 /**
@@ -20,6 +21,10 @@ use Modules\SmartCARS3phpVMS7Api\Support\RankLevel;
  */
 class PilotController extends Controller
 {
+    private const LOGIN_MAX_FAILED_ATTEMPTS = 10;
+    private const LOGIN_FAILED_ATTEMPTS_DECAY_SECONDS = 60;
+    private const LOGIN_LIMITER_PREFIX = 'smartcars-login:';
+
     private function retrieveUserInformation(User $user)
     {
 
@@ -52,29 +57,19 @@ class PilotController extends Controller
         }
         return $information;
     }
-    private function refusal(string $message, string $code, int $status)
-    {
-        return response()->json(['message' => $message, 'code' => $code], $status);
-    }
-    private function stateRefusal(User $user)
-    {
-        if ($user->trashed()) {
-            return $this->suspended();
-        }
-        return match ($user->state) {
-            UserState::ACTIVE, UserState::ON_LEAVE => null,
-            UserState::PENDING => $this->refusal('This pilot account is waiting for approval', 'pilot_pending', 409),
-            UserState::REJECTED => $this->refusal('This pilot account was rejected', 'pilot_rejected', 403),
-            default => $this->suspended(),
-        };
-    }
-    private function suspended()
-    {
-        return $this->refusal('This pilot account is suspended', 'pilot_suspended', 403);
-    }
     private function signIn(User $user)
     {
-        return $this->stateRefusal($user) ?? response()->json($this->retrieveUserInformation($user));
+        return PilotState::refusal($user) ?? response()->json($this->retrieveUserInformation($user));
+    }
+    private function isPasswordOrApiKey(User $user, $password): bool
+    {
+        if (!is_string($password) || $password === '') {
+            return false;
+        }
+        if (password_verify($password, $user['password'])) {
+            return true;
+        }
+        return is_string($user['api_key']) && $user['api_key'] !== '' && hash_equals($user['api_key'], $password);
     }
     private function userBySession(Request $request): ?User
     {
@@ -116,13 +111,15 @@ class PilotController extends Controller
         if (is_null($user)) {
             return response()->json(['message' => 'The username or password is incorrect'], 401);
         }
-        // Check the password
-        if(password_verify($request->input('password'), $user['password'])) {
+        $limiterKey = self::LOGIN_LIMITER_PREFIX.$user->id;
+        if (RateLimiter::tooManyAttempts($limiterKey, self::LOGIN_MAX_FAILED_ATTEMPTS)) {
+            return PilotState::refusalResponse('Too many sign-in attempts, try again in a minute', 'too_many_attempts', 429);
+        }
+        if ($this->isPasswordOrApiKey($user, $request->input('password'))) {
+            RateLimiter::clear($limiterKey);
             return $this->signIn($user);
         }
-        if ($request->input('password') == $user['api_key']) {
-            return $this->signIn($user);
-        }
+        RateLimiter::hit($limiterKey, self::LOGIN_FAILED_ATTEMPTS_DECAY_SECONDS);
         return response()->json(['message' => 'The username or password is incorrect'], 401);
     }
 
@@ -162,7 +159,7 @@ class PilotController extends Controller
     public function verify(Request $request)
     {
         $user = $this->userBySession($request);
-        if ($user === null || $this->stateRefusal($user) !== null) {
+        if ($user === null || PilotState::refusal($user) !== null) {
             return response('', 401);
         }
         Log::debug("User Found with Verify");

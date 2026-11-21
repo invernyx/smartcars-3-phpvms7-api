@@ -56,15 +56,41 @@ class RouteServiceProvider extends ServiceProvider
 
         Route::group($config, function() {
             Route::get('import', function() {
+                return self::confirmationPage(
+                    'Import old smartCARS 3 flight data',
+                    'This queues a job that copies the flight logs and flight paths saved by the old smartCARS 3 module into their PIREPs.',
+                    url('admin/smartcars/import')
+                );
+            });
+            Route::post('import', function() {
                 ImportOldPireps::dispatch();
                 return "Old Pirep Import Job Queued. Please wait for pireps to get imported.";
             });
             Route::get('recalc', function() {
+                return self::confirmationPage(
+                    'Recalculate PIREP distances',
+                    'This queues a job that calculates the distance of every smartCARS 3 PIREP that has none.',
+                    url('admin/smartcars/recalc')
+                );
+            });
+            Route::post('recalc', function() {
                 RecalculateAllDistances::dispatch();
                 return "Pirep Calculation Job Queued. Please wait up to 10 minutes for pireps to get recalculated. If you have your private discord notification channel setup properly, you will receive notifications when this has been completed.";
             });
         });
     }
+
+    // Static so the route closures never use $this, which route:cache would then have to serialize.
+    private static function confirmationPage(string $title, string $description, string $action): string
+    {
+        return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'.e($title).'</title></head><body>'
+            .'<h1>'.e($title).'</h1>'
+            .'<p>'.e($description).'</p>'
+            .'<form method="POST" action="'.e($action).'">'.csrf_field()
+            .'<button type="submit">Queue the job</button></form>'
+            .'</body></html>';
+    }
+
     /**
      * Register any API routes your module has. Remove this if you aren't using any
      */

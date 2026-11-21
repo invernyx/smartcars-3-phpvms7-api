@@ -7,8 +7,8 @@
 smartCARS is a web-based flight tracking system for virtual airlines. This repository contains the web script files for smartCARS in phpVMS 7.
 
 ## Requirements
-- phpVMS 7.0.0 or Later (version 2.0.0 is tested on phpVMS 7.0.11)
-- PHP 8.0 or higher
+- phpVMS 7.0.0 or Later (version 2.0.0 was tested on phpVMS 7.0.11; version 2.0.1 was reviewed against the phpVMS 7.0.11 and 7.0.13 sources, not yet tested on a running site)
+- PHP 8.1 or higher
 - A webserver that accepts the Authorization header (Apache, nginx, etc.)
     - If you are using a shared hosting provider, you may need to contact them to enable this feature.
 
@@ -44,6 +44,27 @@ This URL will be the "Script URL" option in smartCARS Central when managing your
     * Restrict the flights to company
 
 ## Changelog
+
+### 2.0.1
+
+Version 2.0.1 fixes security and reliability issues found in 2.0.0. A smartCARS client needs no change: apart from the new refusals below, every request and answer stays as it was. Replace the module folder; there is no migration to run.
+
+**Security**
+
+- Every authenticated route checks the pilot's state, not only `pilot/login` and `pilot/resume`: a pilot who becomes pending, rejected or suspended after signing in is refused on the next request with the same answers as sign-in (`pilot_pending`, `pilot_rejected`, `pilot_suspended`). See "Sign-in".
+- Signing in with an email and an API key compares the key strictly: the password must be exactly the pilot's API key, and a pilot without an API key cannot sign in this way.
+- Failed sign-ins are limited to 10 a minute per pilot account. Past that, `pilot/login` answers `429` with the code `too_many_attempts` until the minute is over, even with the right password; resuming a saved session (`pilot/resume`) is not affected. The limit uses the site's cache, so it needs a persistent cache driver. See "Sign-in".
+- `flights/book`, `flights/bookings` and `flights/unbook` always act for the signed-in pilot, taken from the session, never from a pilot id in the request.
+- The admin pages `/admin/smartcars/import` and `/admin/smartcars/recalc` no longer start their job when opened: they show what the job does and a button that queues it, so a link or an embedded image can no longer start a job in an admin's browser. See "Legacy flight data import" and "Pirep Distance Recalculation".
+- The module no longer writes whole `flights/charter` and `flights/start` requests to the site's log.
+
+**Reliability**
+
+- `flights/complete` files a flight in one database transaction, with the PIREP locked: two calls for the same flight cannot file it twice, and a filing that fails part-way is rolled back entirely, so a retry starts clean. A deadlock inside one of the optional steps (filed loads, fields, route, aircraft change) rolls back and retries the whole filing, up to 3 attempts, instead of carrying on.
+- For admins: phpVMS's PIREP-filed listeners (notifications, for example) now run inside that transaction. With phpVMS's default `sync` queue, a listener that keeps failing (a Discord webhook that cannot be reached, for example) now stops the filing, and a notification may be sent again when a failed filing is retried. With a separate queue worker (redis, sqs), a queued notification could be processed before the filing is committed, so a worker can send a notification for a filing that is then rolled back, and send it again when the filing is retried. `flights/cancel` also runs in a transaction now, and phpVMS's PIREP status-change notification runs inside it: with the `sync` queue, a cancel fails while the Discord webhook cannot be reached.
+- `flights/cancel` locks the PIREP too, so a cancel that arrives while the flight is being filed waits for the filing to end and then answers for the filed flight: a discard sent after a `flights/complete` that timed out on the client answers `409` `flight_already_filed` instead of cancelling or deleting the filed PIREP.
+- The legacy flight data import (`/admin/smartcars/import`) imports one row at a time and removes each row from `smartCARS3_FlightData` once its PIREP holds the data (after the import is committed, so a stop in between leaves the row for the next run, which finds nothing left to copy). Each row's import locks its PIREP, so two overlapping runs do not duplicate anything, and a run that stops part-way continues where it stopped. A row whose PIREP does not exist, or that cannot be read or imported, stays in the table (a failure is logged), and the table is dropped only once it is empty. Copies made by an earlier interrupted 2.0.0 run stay as they are. See "Legacy flight data import".
+- The distance recalculation (`/admin/smartcars/recalc`) only fills in smartCARS 3 PIREPs that have no distance, in batches; every other PIREP keeps its stored distance. A PIREP whose distance cannot be computed is skipped with a log line. A progress message that cannot be posted to the Discord webhook is logged and the recalculation carries on. See "Pirep Distance Recalculation".
 
 ### 2.0.0 (changes since 1.0.3)
 
@@ -136,13 +157,23 @@ If your community has the Bids > Restrict Aircraft setting enabled, the aircraft
 
 ## Pirep Distance Recalculation
 
-Included with this API is a job that'll recalculate PIREP distances for all smartCARS pireps, based on the ACARS telemetry logs on the server.
+Included with this API is a job that'll calculate the distance of older smartCARS PIREPs that have none, based on the ACARS telemetry logs on the server.
 
-To execute this, navigate directly to `/admin/smartcars/recalc` in your web browser (e.g. `https://myva.com/admin/smartcars/recalc`) to start the recalculation job.
+To execute this, navigate to `/admin/smartcars/recalc` in your web browser while signed in as an admin (e.g. `https://myva.com/admin/smartcars/recalc`). The page describes the job; press "Queue the job" to start it. Opening the page alone does nothing.
 
-The job recomputes the distance from the positions for every PIREP filed under the module's default source name (`pireps.source_name`) and replaces the stored distance, including one filed with `distanceFlown` (see "Optional flight data" below). PIREPs a client filed under a versioned source name are left alone.
+The job computes the distance from the positions only for the PIREPs filed under the module's default source name (`smartCARS 3`) whose distance is empty or 0, a batch at a time. Every other PIREP keeps its stored distance, including one filed with `distanceFlown` (see "Optional flight data" below) and every PIREP a client filed under a versioned source name. A PIREP whose distance cannot be computed is skipped with a line in the site's log, and the job carries on with the next one.
 
-If you have a private discord notification channel setup, you will receive progress updates regarding the status of the job as it executes on the backend.
+If you have a private discord notification channel setup, you will receive progress updates regarding the status of the job as it executes on the backend. A message that cannot be posted (the webhook cannot be reached or is rate limited) is logged and the job carries on.
+
+## Legacy flight data import
+
+Sites upgraded from the old smartCARS 3 module may still have its flight logs and flight paths in the `smartCARS3_FlightData` table. A job copies them into their PIREPs, as PIREP comments and ACARS flight path points.
+
+To execute this, navigate to `/admin/smartcars/import` in your web browser while signed in as an admin (e.g. `https://myva.com/admin/smartcars/import`). The page describes the job; press "Queue the job" to start it. Opening the page alone does nothing.
+
+The job imports one row at a time and deletes the row from `smartCARS3_FlightData` once its PIREP holds the data. Each row's import locks its PIREP, so two overlapping runs do not duplicate anything, and a run that stops part-way (phpVMS's cron stops a queued job after a while) continues where it stopped when queued again. A row whose PIREP does not exist stays in the table. A row that cannot be read or imported stays in the table too, with a line in the site's log (`smartCARS: legacy flight data for PIREP <id> could not be imported: ...`), and the job moves on to the next row. At the end, the table is dropped if it is empty; otherwise the log says how many rows are left.
+
+A comment or a flight path point the PIREP already holds is not added again. Copies made by an earlier interrupted 2.0.0 run stay as they are: the job does not remove them.
 
 ## Optional flight data
 
@@ -293,9 +324,10 @@ A refusal answers `{ "message": "...", "code": "..." }`. `message` is the reason
 | `diversion_disabled`      | the VA does not accept diversions                                                        | `flights/divert`                                                                                |
 | `unknown_airport`         | an airport the request names is not in the VA's data                                     | `flights/divert`, `flights/charter`                                                             |
 | `invalid_request`         | the request is malformed, or names a flight or an aircraft that does not exist           | `flights/book`, `flights/rebook`, `flights/charter`, `flights/events`, `flights/complete`, `flights/search`, `flights/search/arrivals` |
-| `pilot_pending`           | the pilot account is waiting for approval (`409`)                                        | `pilot/login`, `pilot/resume`                                                                    |
-| `pilot_rejected`          | the pilot account was rejected (`403`)                                                   | `pilot/login`, `pilot/resume`                                                                    |
-| `pilot_suspended`         | the pilot account is suspended, deleted or in any other state that is not active (`403`) | `pilot/login`, `pilot/resume`                                                                    |
+| `pilot_pending`           | the pilot account is waiting for approval (`409`)                                        | `pilot/login`, `pilot/resume`, every authenticated route                                        |
+| `pilot_rejected`          | the pilot account was rejected (`403`)                                                   | `pilot/login`, `pilot/resume`, every authenticated route                                        |
+| `pilot_suspended`         | the pilot account is suspended, deleted or in any other state that is not active (`403`) | `pilot/login`, `pilot/resume`, every authenticated route (a deleted pilot: sign-in only)        |
+| `too_many_attempts`       | too many failed sign-ins for the account in the last minute (`429`)                      | `pilot/login`                                                                                   |
 
 The routes column says where this module sends each code; it is not a restriction. Any route may send any code, and a backend may send codes outside this list, so a client falls back to the message for a code it does not know.
 
@@ -303,7 +335,13 @@ The booking refusals phpVMS raises on `flights/book` and `flights/charter` (the 
 
 ## Sign-in
 
-`pilot/login` and `pilot/resume` check the pilot's state: an active or on-leave pilot signs in; a pending one is refused with `409` and `pilot_pending`, a rejected one with `403` and `pilot_rejected`, and a suspended or deleted one, or one in any other state, with `403` and `pilot_suspended`. An unknown user and a wrong password at `pilot/login` both answer `401` with the same body, an unknown session at `pilot/resume` answers `401`. `pilot/verify`, called by the smartCARS servers, which read any JSON body as a valid session, answers an unknown session and a pilot who may not fly with `401` and an empty body. `rankLevel` is the 0-based position of the pilot's rank among the ranks ordered by hours; it is deprecated and still sent, since each aircraft's `restriction` says which aircraft the pilot may fly.
+`pilot/login` and `pilot/resume` check the pilot's state: an active or on-leave pilot signs in; a pending one is refused with `409` and `pilot_pending`, a rejected one with `403` and `pilot_rejected`, and a suspended or deleted one, or one in any other state, with `403` and `pilot_suspended`. An unknown user and a wrong password at `pilot/login` both answer `401` with the same body, an unknown session at `pilot/resume` answers `401`.
+
+Every authenticated route (every route that takes the session in the `Authorization` header) checks the pilot's state on each request with the same answers, so a pilot who becomes pending, rejected or suspended after signing in is refused from the next request on. A pilot deleted after signing in gets `401` `Invalid Token` on an authenticated route instead, since the session lookup does not find a deleted pilot; only `pilot/login` and `pilot/resume` answer `pilot_suspended` for one.
+
+`pilot/login` counts failed attempts per pilot account: after 10 failed attempts within a minute, it answers `429` with `{ "message": "Too many sign-in attempts, try again in a minute", "code": "too_many_attempts" }` until the minute is over, even with the right password. A successful sign-in clears the count, and an unknown user is answered `401` as above without counting. `pilot/resume` and `pilot/verify` are not limited, so a pilot with a saved session keeps signing in while the limit applies. The count is kept in the site's cache, so the limit needs a persistent cache driver (file, redis, database or memcached; with `array` it does nothing). Under many parallel requests the count is approximate, and a few more than 10 attempts can get through in one minute. Since the count is per account, anyone who knows a pilot's username can block that pilot's sign-in with a password or API key at `pilot/login` for a minute with 10 wrong attempts; resuming a saved session keeps working.
+
+`pilot/verify`, called by the smartCARS servers, which read any JSON body as a valid session, answers an unknown session and a pilot who may not fly with `401` and an empty body. `rankLevel` is the 0-based position of the pilot's rank among the ranks ordered by hours; it is deprecated and still sent, since each aircraft's `restriction` says which aircraft the pilot may fly.
 
 `pilot/statistics` counts accepted PIREPs only (`flightsFlown`, `pirepsFiled`, `hoursFlown`, `averageLandingRate`); `averageLandingRate` is 0 when there are none.
 
