@@ -36,6 +36,7 @@ use App\Models\PirepFare;
 use App\Models\PirepFieldValue;
 use App\Models\SimBrief;
 use App\Models\User;
+use App\Services\AirportService;
 use App\Services\BidService;
 use App\Services\FareService;
 use App\Services\FlightService;
@@ -53,6 +54,7 @@ use Modules\SmartCARS3phpVMS7Api\Models\FlightAnalysis;
 use Modules\SmartCARS3phpVMS7Api\Models\PirepLog;
 use Modules\SmartCARS3phpVMS7Api\Providers\AppServiceProvider;
 use Modules\SmartCARS3phpVMS7Api\Support\FieldExtensions;
+use Modules\SmartCARS3phpVMS7Api\Support\FreeFlightPlaceholders;
 use Modules\SmartCARS3phpVMS7Api\Support\ScSettings;
 
 /**
@@ -135,6 +137,11 @@ class FlightsController extends Controller
         PirepState::REJECTED => 'rejected',
     ];
     private const COMPLETE_TRANSACTION_ATTEMPTS = 3;
+    // pireps.flight_number is a VARCHAR(10)
+    private const FREE_FLIGHT_NUMBER_MAX_LENGTH = 10;
+    private const INTEGER_INPUT_PATTERN = '/^-?\d+$/D';
+    // airports.id is a VARCHAR(8) since phpVMS 7.0.11: a longer ident would be cut into another airport's id
+    private const AIRPORT_ID_MAX_LENGTH = 8;
 
     public function __construct(
         public FlightService $flightService,
@@ -600,6 +607,12 @@ class FlightsController extends Controller
             if (!is_array($input['flightData']) || !array_is_list($input['flightData'])) {
                 return $this->refusal('flightData must be a base64 JSON array of events', 'invalid_request', 422);
             }
+            if ($pirep->flight_id === null) {
+                $refusal = $this->applyFreeFlightFiling($pirep, $request);
+                if ($refusal !== null) {
+                    return $refusal;
+                }
+            }
 
             //Log::debug("Found Pirep to close out");
             $pirep->status = PirepStatus::ARRIVED;
@@ -776,35 +789,40 @@ class FlightsController extends Controller
             return;
         }
         $aircraftId = (int) $aircraftId;
-        $reason = $this->aircraftChangeRefusal($pirep, $aircraftId);
-        if ($reason !== null) {
-            Log::info('smartCARS: PIREP '.$pirep->id.' keeps aircraft '.$pirep->aircraft_id.' instead of '.$aircraftId.': '.$reason);
+        $refusal = $this->aircraftChangeRefusal($pirep, $aircraftId);
+        if ($refusal !== null) {
+            Log::info('smartCARS: PIREP '.$pirep->id.' keeps aircraft '.$pirep->aircraft_id.' instead of '.$aircraftId.': '.$refusal['reason']);
             return;
         }
         $pirep->aircraft_id = $aircraftId;
         $pirep->unsetRelation('aircraft');
     }
-    private function aircraftChangeRefusal(Pirep $pirep, int $aircraftId): ?string
+    /**
+     * Why the pilot of the PIREP (saved or not yet) may not fly the aircraft, with the refusal code
+     * the free-flight start answers
+     */
+    private function aircraftChangeRefusal(Pirep $pirep, int $aircraftId): ?array
     {
         $aircraft = Aircraft::find($aircraftId);
         if ($aircraft === null) {
-            return 'it does not exist';
+            return ['code' => 'aircraft_not_available', 'reason' => 'it does not exist'];
         }
         if (!app(UserService::class)->aircraftAllowed($pirep->user, $aircraftId)) {
-            return 'the pilot may not fly its subfleet';
+            return ['code' => 'aircraft_not_allowed', 'reason' => 'the pilot may not fly its subfleet'];
         }
         if ($aircraft->state !== AircraftState::PARKED) {
-            return 'it is not parked';
+            return ['code' => 'aircraft_not_available', 'reason' => 'it is not parked'];
         }
         if (setting('pireps.only_aircraft_at_dpt_airport') && $aircraft->airport_id !== $pirep->dpt_airport_id) {
-            return 'it is not at the departure airport';
+            return ['code' => 'aircraft_not_at_airport', 'reason' => 'it is not at the departure airport'];
         }
         $isOnAnotherFlight = Pirep::where('aircraft_id', $aircraftId)
-            ->where('id', '!=', $pirep->id)
+            // id != NULL matches no row, so an unsaved PIREP skips the clause
+            ->when($pirep->exists, fn ($query) => $query->where('id', '!=', $pirep->id))
             ->whereIn('state', [PirepState::IN_PROGRESS, PirepState::PAUSED])
             ->exists();
         if ($isOnAnotherFlight) {
-            return 'it is on another flight in progress';
+            return ['code' => 'aircraft_not_available', 'reason' => 'it is on another flight in progress'];
         }
         if (setting('simbrief.block_aircraft', false)) {
             $isBriefedForAnotherPilot = SimBrief::where('aircraft_id', $aircraftId)
@@ -812,18 +830,18 @@ class FlightsController extends Controller
                 ->whereNotNull('flight_id')
                 ->exists();
             if ($isBriefedForAnotherPilot) {
-                return 'another pilot has an active SimBrief briefing for it';
+                return ['code' => 'aircraft_not_available', 'reason' => 'another pilot has an active SimBrief briefing for it'];
             }
         }
-        if (setting('bids.block_aircraft', false)) {
-            $isBookedByAnotherPilot = Bid::where('aircraft_id', $aircraftId)
-                ->where('user_id', '!=', $pirep->user_id)
-                ->exists();
-            if ($isBookedByAnotherPilot) {
-                return 'another pilot has booked it';
-            }
+        if ($this->isBookedByAnotherPilot($aircraftId, (int) $pirep->user_id)) {
+            return ['code' => 'aircraft_not_available', 'reason' => 'another pilot has booked it'];
         }
         return null;
+    }
+    private function isBookedByAnotherPilot(int $aircraftId, int $userId): bool
+    {
+        return setting('bids.block_aircraft', false)
+            && Bid::where('aircraft_id', $aircraftId)->where('user_id', '!=', $userId)->exists();
     }
     private function applyFiledLoads(Pirep $pirep, array $input): void
     {
@@ -1397,6 +1415,225 @@ class FlightsController extends Controller
         //return response()->json($existing);
 
     }
+    public function freeStart(Request $request)
+    {
+        if (!ScSettings::areFreeFlightsOn()) {
+            return $this->refusal('Free flights are disabled for this VA', 'free_flights_disabled', 422);
+        }
+        FreeFlightPlaceholders::ensure();
+
+        $flightNumber = $this->freeFlightNumber($request->input('flightNumber'));
+        if ($flightNumber === null) {
+            return $this->refusal('flightNumber must be 1 to '.self::FREE_FLIGHT_NUMBER_MAX_LENGTH.' characters', 'invalid_request', 422);
+        }
+        $departureInput = $request->input('departure');
+        if (!is_string($departureInput) || trim($departureInput) === '') {
+            return $this->refusal('departure is required', 'invalid_request', 422);
+        }
+        $arrivalInput = $request->input('arrival');
+        if ($arrivalInput !== null && !is_string($arrivalInput)) {
+            return $this->refusal('arrival must be an ICAO code', 'invalid_request', 422);
+        }
+        $aircraftInput = $request->input('aircraftID');
+        $aircraftId = $aircraftInput === null ? FreeFlightPlaceholders::aircraftId() : $this->integerInput($aircraftInput);
+        if ($aircraftId === null) {
+            return $this->refusal('aircraftID must be an integer', 'invalid_request', 422);
+        }
+        $route = $request->input('route');
+        if ($route !== null && (!is_array($route) || !array_is_list($route) || array_filter($route, fn ($waypoint) => !is_string($waypoint)) !== [])) {
+            return $this->refusal('route must be a list of waypoints', 'invalid_request', 422);
+        }
+        $cruiseInput = $request->input('cruise');
+        $cruise = $cruiseInput === null ? null : $this->integerInput($cruiseInput);
+        if ($cruiseInput !== null && $cruise === null) {
+            return $this->refusal('cruise must be an integer', 'invalid_request', 422);
+        }
+
+        $departure = $this->resolveFreeFlightAirport($departureInput);
+        if ($departure === null) {
+            return $this->refusal('Unknown departure airport', 'unknown_departure_airport', 422);
+        }
+        $arrival = $this->resolveFreeFlightAirport($arrivalInput);
+        if ($arrival === null) {
+            return $this->refusal('Unknown arrival airport', 'unknown_arrival_airport', 422);
+        }
+        $isPlaceholderAircraft = FreeFlightPlaceholders::isPlaceholderAircraft($aircraftId);
+        // An aircraft removed since the client's fleet sync is a refusal the client can fall back from
+        if (!$isPlaceholderAircraft && Aircraft::find($aircraftId) === null) {
+            return $this->refusal('Aircraft '.$aircraftId.' not found', 'aircraft_not_available', 409);
+        }
+        $user = Auth::user();
+        // phpVMS prefile checks the SimBrief block but not the bid block
+        if (!$isPlaceholderAircraft && $this->isBookedByAnotherPilot($aircraftId, (int) $user->id)) {
+            return $this->refusal('Another pilot has booked aircraft '.$aircraftId, 'aircraft_not_available', 409);
+        }
+
+        $attrs = [
+            'flight_number'  => $flightNumber,
+            'airline_id'     => env('SC3_CHARTER_AIRLINE_ID', Airline::first()->id),
+            'flight_type'    => FlightType::CHARTER_PAX_ONLY,
+            'dpt_airport_id' => $departure,
+            'arr_airport_id' => $arrival,
+            'aircraft_id'    => $aircraftId,
+            'source'         => PirepSource::ACARS,
+            'source_name'    => $this->sourceName($request),
+        ];
+        if (!empty($route)) {
+            $attrs['route'] = implode(' ', $route);
+        }
+        if ($cruise !== null && $cruise > 0) {
+            $attrs['level'] = $cruise;
+        }
+
+        // phpVMS prefile hands back the first recent PIREP of the same pilot, flight number and airports,
+        // filed ones included, so a new flight could continue a filed one: a retried start and a start
+        // after a filed duplicate are prefiled here
+        $candidate = $this->newFreeFlightPirep($user, $attrs);
+        $isRetry = $this->findOpenFreeFlightDuplicate($candidate) !== null;
+        $isAfterFiledDuplicate = !$isPlaceholderAircraft && !$isRetry
+            && $this->pirepService->findDuplicate($candidate) !== false;
+        if ($isAfterFiledDuplicate) {
+            $refusal = $this->aircraftChangeRefusal($this->newFreeFlightPirep($user, $attrs), $aircraftId);
+            if ($refusal !== null) {
+                return $this->refusal('Aircraft '.$aircraftId.' cannot be flown: '.$refusal['reason'], $refusal['code'], 409);
+            }
+        }
+
+        try {
+            $pirep = $isPlaceholderAircraft || $isRetry || $isAfterFiledDuplicate
+                ? $this->prefileFreeFlight($user, $attrs)
+                : $this->pirepService->prefile($user, $attrs);
+        } catch (AbstractHttpException $e) {
+            Log::warning($e->getMessage());
+            return $this->exceptionRefusal($e, 409);
+        } catch (\Throwable $e) {
+            Log::error($e);
+            return response()->json(['message' => $e->getMessage()], 500);
+        }
+        // The PIREP exists now: a fare failure must not leave the client without its tracking id
+        try {
+            $this->generateFares(Aircraft::find($aircraftId), null, $pirep);
+        } catch (\Throwable $e) {
+            Log::error('smartCARS: could not generate the fares of free flight PIREP '.$pirep->id.': '.$e->getMessage());
+        }
+        return response()->json(['trackingID' => $pirep->id]);
+    }
+    /**
+     * phpVMS prefile accepts only a parked aircraft of the pilot's rank, so the one shared placeholder
+     * aircraft is prefiled here with prefile's other rules; so is a retried start, and a fleet aircraft
+     * whose start follows a filed duplicate once its own checks passed
+     */
+    private function prefileFreeFlight(User $user, array $attrs): Pirep
+    {
+        if (setting('pilots.only_flights_from_current', false) && $user->curr_airport_id !== $attrs['dpt_airport_id']) {
+            throw new UserNotAtAirport($user, Airport::find($attrs['dpt_airport_id']));
+        }
+        $pirep = $this->newFreeFlightPirep($user, $attrs);
+        // A start retried after a lost answer gets the PIREP it already created, as prefile does
+        $duplicate = $this->findOpenFreeFlightDuplicate($pirep);
+        if ($duplicate !== null) {
+            Log::info('smartCARS: found duplicate free flight PIREP, id='.$duplicate->id);
+            $pirep = $duplicate;
+            $pirep->status = PirepStatus::INITIATED;
+        }
+        $pirep->save();
+        $pirep->refresh();
+        event(new PirepPrefiled($pirep));
+        return $pirep;
+    }
+    /**
+     * phpVMS findDuplicate returns its first match, which may be a filed PIREP even when an open one exists
+     */
+    private function findOpenFreeFlightDuplicate(Pirep $pirep): ?Pirep
+    {
+        $minutes = setting('pireps.duplicate_check_time', 10);
+        return Pirep::where([
+            'user_id'        => $pirep->user_id,
+            'airline_id'     => $pirep->airline_id,
+            'flight_number'  => $pirep->flight_number,
+            'dpt_airport_id' => $pirep->dpt_airport_id,
+            'arr_airport_id' => $pirep->arr_airport_id,
+        ])
+            ->whereIn('state', [PirepState::IN_PROGRESS, PirepState::PAUSED])
+            ->where('created_at', '>=', Carbon::now('UTC')->subMinutes($minutes)->toDateTimeString())
+            ->orderBy('created_at', 'desc')
+            ->first();
+    }
+    private function newFreeFlightPirep(User $user, array $attrs): Pirep
+    {
+        return new Pirep(array_merge($attrs, [
+            'user_id' => $user->id,
+            'state'   => PirepState::IN_PROGRESS,
+            'status'  => PirepStatus::INITIATED,
+        ]));
+    }
+    /**
+     * An empty ICAO is the unknown airport; a missing one is added only where phpVMS would add it at prefile
+     */
+    private function resolveFreeFlightAirport(?string $icao): ?string
+    {
+        $icao = strtoupper(trim((string) $icao));
+        if ($icao === '') {
+            $icao = FreeFlightPlaceholders::AIRPORT_ID;
+        }
+        if (Airport::find($icao) !== null) {
+            return $icao;
+        }
+        if ($icao === FreeFlightPlaceholders::AIRPORT_ID) {
+            FreeFlightPlaceholders::ensure();
+            return $icao;
+        }
+        if (setting('general.allow_unadded_airports', false) !== true || strlen($icao) > self::AIRPORT_ID_MAX_LENGTH) {
+            return null;
+        }
+        try {
+            app(AirportService::class)->lookupAirportIfNotFound($icao);
+        } catch (\Throwable $e) {
+            $this->rethrowConcurrencyError($e);
+            Log::warning('smartCARS: could not add airport '.$icao.': '.$e->getMessage());
+            return null;
+        }
+        // The lookup returns nothing for an ICAO its provider does not know
+        return Airport::find($icao) !== null ? $icao : null;
+    }
+    private function applyFreeFlightFiling(Pirep $pirep, Request $request)
+    {
+        $arrival = $request->input('arrival');
+        if ($arrival !== null && $arrival !== '') {
+            $airportId = is_string($arrival) ? $this->resolveFreeFlightAirport($arrival) : null;
+            if ($airportId === null) {
+                return $this->refusal('Unknown arrival airport', 'unknown_arrival_airport', 422);
+            }
+            $pirep->arr_airport_id = $airportId;
+            $pirep->unsetRelation('arr_airport');
+        }
+        $flightNumberInput = $request->input('flightNumber');
+        if ($flightNumberInput !== null) {
+            $flightNumber = $this->freeFlightNumber($flightNumberInput);
+            if ($flightNumber === null) {
+                Log::warning('smartCARS: PIREP '.$pirep->id.' keeps its flight number, the filed one is not 1 to '.self::FREE_FLIGHT_NUMBER_MAX_LENGTH.' characters');
+            } else {
+                $pirep->flight_number = $flightNumber;
+            }
+        }
+        return null;
+    }
+    private function freeFlightNumber($value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+        $value = trim($value);
+        $length = mb_strlen($value);
+        return $length >= 1 && $length <= self::FREE_FLIGHT_NUMBER_MAX_LENGTH ? $value : null;
+    }
+    private function integerInput($value): ?int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        return is_string($value) && preg_match(self::INTEGER_INPUT_PATTERN, $value) === 1 ? (int) $value : null;
+    }
     public function unbook(Request $request)
     {
 
@@ -1645,23 +1882,25 @@ class FlightsController extends Controller
             return false;
         }
     }
-    private function generateFares($aircraft, $flight, $pirep)
+    private function generateFares($aircraft, ?Flight $flight, $pirep)
     {
         // Figure out the proper fares to use for this flight/aircraft
-        $all_fares = $this->fareService->getFareWithOverrides($aircraft->subfleet->fares, $flight->fares);
+        $all_fares = $flight === null
+            ? $this->freshFares($pirep)
+            : $this->fareService->getFareWithOverrides($aircraft->subfleet->fares, $flight->fares);
 
         // TODO: Reconcile the fares for this aircraft w/ proper for the flight/subfleet
 
         // Get passenger and baggage weights with failsafe defaults
-        if ($flight->flight_type === FlightType::CHARTER_PAX_ONLY) {
+        if (($flight?->flight_type ?? $pirep->flight_type) === FlightType::CHARTER_PAX_ONLY) {
             $bag_weight = setting('simbrief.charter_baggage_weight', 28);
         } else {
             $bag_weight = setting('simbrief.noncharter_baggage_weight', 35);
         }
 
         // Get the load factors with failsafe for loadmax if nothing is defined
-        $lfactor = $flight->load_factor ?? setting('flights.default_load_factor');
-        $lfactorv = $flight->load_factor_variance ?? setting('flights.load_factor_variance');
+        $lfactor = $flight?->load_factor ?? setting('flights.default_load_factor');
+        $lfactorv = $flight?->load_factor_variance ?? setting('flights.load_factor_variance');
 
         $loadmin = $lfactor - $lfactorv;
         $loadmin = max($loadmin, 0);
@@ -1674,8 +1913,8 @@ class FlightsController extends Controller
         }
 
         if (setting('flights.use_cargo_load_factor', false)) {
-            $cgolfactor = $flight->load_factor ?? setting('flights.default_cargo_load_factor');
-            $cgolfactorv = $flight->load_factor_variance ?? setting('flights.cargo_load_factor_variance');
+            $cgolfactor = $flight?->load_factor ?? setting('flights.default_cargo_load_factor');
+            $cgolfactorv = $flight?->load_factor_variance ?? setting('flights.cargo_load_factor_variance');
 
             $cgoloadmin = $cgolfactor - $cgolfactorv;
             $cgoloadmin = max($cgoloadmin, 0);

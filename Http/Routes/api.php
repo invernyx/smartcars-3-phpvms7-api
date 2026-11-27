@@ -48,6 +48,7 @@ Route::group(['middleware' => [SCHeaders::class]], function() {
             Route::match(['post', 'options'], '/divert', 'divert')->defaults('scCapability', 'divert')->defaults('scCapabilitySetting', 'pireps.handle_diversion');
             Route::match(['post', 'options'], '/events', 'events')->defaults('scCapability', 'flight-events');
             Route::match(['post', 'options'], '/start', 'start');
+            Route::match(['post', 'options'], '/free/start', 'freeStart')->defaults('scCapability', 'free-flights')->defaults('scCapabilitySetting', 'smartcars.free_flights');
             Route::match(['get', 'options'], '/destinations', 'destinations')->defaults('scCapability', ['flight-destinations', 'destination-routes']);
             Route::match(['get', 'options'], '/search', 'search');
             Route::match(['post', 'options'], '/search/arrivals', 'searchArrivals')->defaults('scCapability', 'arrival-search');

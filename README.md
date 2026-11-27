@@ -7,7 +7,7 @@
 smartCARS is a web-based flight tracking system for virtual airlines. This repository contains the web script files for smartCARS in phpVMS 7.
 
 ## Requirements
-- phpVMS 7.0.0 or Later (version 2.0.0 was tested on phpVMS 7.0.11; version 2.0.1 was reviewed against the phpVMS 7.0.11 and 7.0.13 sources, not yet tested on a running site)
+- phpVMS 7.0.0 or Later (version 2.0.0 was tested on phpVMS 7.0.11; version 2.0.1 was reviewed against the phpVMS 7.0.11 and 7.0.13 sources and version 2.0.2 against the phpVMS 7.0.11 sources, neither yet tested on a running site)
 - PHP 8.1 or higher
 - A webserver that accepts the Authorization header (Apache, nginx, etc.)
     - If you are using a shared hosting provider, you may need to contact them to enable this feature.
@@ -44,6 +44,24 @@ This URL will be the "Script URL" option in smartCARS Central when managing your
     * Restrict the flights to company
 
 ## Changelog
+
+### 2.0.2
+
+Version 2.0.2 adds free flights: a pilot can fly and file a flight with no schedule and no booking, which the VA reviews as any other PIREP. Free flights are off until the VA switches them on. A smartCARS client that does not use them needs no change: apart from the two new fields of `data/aircraft`, the placeholder aircraft left out of it and the placeholder airport left out of `data/airports`, every request and answer stays as it was. Reviewed against the phpVMS 7.0.11 sources.
+
+**Upgrading**
+
+- Replace the module folder, then run the module's migration (Admin > Modules, or `php artisan module:migrate SmartCARS3phpVMS7Api --force`). It adds the `smartcars.free_flights` setting, off by default.
+
+**Added**
+
+- Free flights: `POST /flights/free/start` starts a flight from a flight number, a departure and, optionally, an arrival, an aircraft, a route and a cruise level, and answers the PIREP's tracking ID. `flights/complete` files it like any other flight and also accepts the arrival and the flight number flown. See "Free flights".
+- The setting **Free flights** (`smartcars.free_flights`, off by default). See "Settings".
+- The capability `free-flights`, listed while the setting is on. See "Capabilities".
+- The free-flight placeholders, created the first time a free flight is started: the airport `XXXX` (`Unknown / off-field`), for a departure or arrival that is not an airport, and the aircraft `SC-FREE` (subfleet `SCFREE`), for a flight flown in an aircraft that is not in the VA's fleet. See "Free flights".
+- The refusal codes `free_flights_disabled`, `unknown_departure_airport` and `unknown_arrival_airport`. See "Error codes".
+- `data/aircraft` sends each aircraft's `airport` (where phpVMS has it) and `state` (`parked`, `in_use` or `in_air`), and leaves out the placeholder aircraft. See "Aircraft list".
+- `data/airports` leaves out the placeholder airport `XXXX`, so smartCARS never offers it as an airport to pick. See "Free flights".
 
 ### 2.0.1
 
@@ -136,6 +154,7 @@ The module adds a `smartcars` group to the phpVMS admin settings (run the module
 * **Airline code** (`smartcars.airline_code`): the airline code smartCARS shows for bookings and schedules. `iata` (default): the IATA code, or the ICAO code when the airline has none. `icao`: the ICAO code. PIREP lists always use the ICAO code.
 * **Aircraft name** (`smartcars.aircraft_name`): `detailed` (default): `name (registration) | status`. `plain`: the aircraft name only.
 * **Cancelled flights** (`smartcars.cancel_mode`): `cancel` (default): the PIREP stays, marked cancelled. `delete`: the unfiled PIREP is deleted with its ACARS positions, logs and flight analyses, and a SimBrief OFP stays attached to the booked flight so the pilot can fly it again.
+* **Free flights** (`smartcars.free_flights`): `false` (default): `flights/free/start` refuses every start with `free_flights_disabled`. `true`: pilots can fly free flights, flights with no schedule or booking, filed as PIREPs for review. See "Free flights".
 
 ## phpVMS Socialite SSO Login (Discord/VATSIM)
 
@@ -154,6 +173,47 @@ If you supply a ICAO or IATA code with the flight number (e.g. `DAL1421` or `DL1
 Only numeric flight numbers are supported. For example, `BAW47C` will turn into `BAW0` when you see the bid.
 
 If your community has the Bids > Restrict Aircraft setting enabled, the aircraft selected will be attached to the bid. However, if the setting is not enabled, the subfleet for the same aircraft family will be attached to the flight for manual selection before beginning the flight.
+
+## Free flights
+
+A free flight is a flight with no schedule and no booking: the pilot flies where they like, and smartCARS files it as a PIREP the VA reviews like any other. Charter flights are unchanged. Free flights are off until the **Free flights** setting (`smartcars.free_flights`) is switched on; while it is on, `GET /` lists the capability `free-flights` and smartCARS offers them.
+
+### Starting
+
+`POST /flights/free/start` takes `{ flightNumber, departure, arrival, aircraftID, route, cruise }`:
+
+- `flightNumber` (required): the PIREP's flight number, 1 to 10 characters after trimming (phpVMS's column holds 10).
+- `departure` (required): the departure airport's ICAO code, case-insensitive; `XXXX` for the unknown airport.
+- `arrival` (optional): the arrival airport's ICAO code; absent, null or empty for the unknown airport. It can be set at filing instead.
+- `aircraftID` (optional): an aircraft ID from `data/aircraft`; absent or null for the placeholder aircraft.
+- `route` (optional): the planned route as a list of waypoints, stored as the PIREP's route.
+- `cruise` (optional): the planned cruise level in feet, stored as the PIREP's flight level when above 0.
+
+`aircraftID` and `cruise` may be integers or strings of digits. The answer is `{ "trackingID": "<PIREP ID>" }`, the ID smartCARS then sends to `flights/update`, `flights/events`, `flights/complete` and `flights/cancel`.
+
+The PIREP is created in progress with no flight attached, under the airline named by `SC3_CHARTER_AIRLINE_ID` in your .env file (else the first airline, as for charters), with the charter passenger flight type. A start repeated for the same pilot, airline, flight number and airports within phpVMS's duplicate check time ("PIREP duplicate time check", `pireps.duplicate_check_time`) gets the PIREP it already created while that PIREP is in progress or paused; a start after such a PIREP was filed creates a new one. The fares are rolled from the aircraft's subfleet fares with the VA's default load factors; a fare failure is logged and does not refuse the start.
+
+An airport the VA does not have is added through phpVMS's airport lookup only while phpVMS's "Allow unadded airports" setting (`general.allow_unadded_airports`) is on, and only for an ident of at most 8 characters (phpVMS's airport ID column). With "Automatic airport lookup" (`general.auto_airport_lookup`) on, an ident the lookup does not know is refused; with it off, phpVMS saves the airport with the ident as its name, at 0, 0. Otherwise the start is refused with `unknown_departure_airport` or `unknown_arrival_airport` (`422`), and smartCARS can start again with `XXXX`.
+
+A fleet aircraft goes through phpVMS's own checks, as on `flights/start`: the pilot must be at the departure airport while "Flights from Current" (`pilots.only_flights_from_current`) is on, the aircraft must be parked, at the departure airport while "Restrict Aircraft At Departure" (`pireps.only_aircraft_at_dpt_airport`) is on, allowed to the pilot while "Restrict Aircraft to Ranks" (`pireps.restrict_aircraft_to_rank`) is on (phpVMS then also applies "Restrict Aircraft by Type Ratings", `pireps.restrict_aircraft_to_typerating`), and not held by another pilot's SimBrief briefing while SimBrief's "Restrict Aircraft" (`simbrief.block_aircraft`) is on. While the bids' "Restrict Aircraft" (`bids.block_aircraft`) is on, an aircraft another pilot has booked is refused too. A start that follows a filed PIREP (see the duplicate check above) is not handed to phpVMS's prefile, which would hand back the filed PIREP: the module runs these checks itself (the rank and type rating rules whenever either setting is on), and also refuses an aircraft on another flight in progress with `aircraft_not_available`. An `aircraftID` that does not exist (an aircraft deleted since smartCARS read the fleet) is refused with `aircraft_not_available`, so smartCARS can start again with the placeholder aircraft. The placeholder aircraft is not subject to the aircraft rules; only the pilot location rule ("Flights from Current") applies to it.
+
+Answers: `200` with the tracking ID; `401` for an invalid session; `409` with `pilot_not_at_airport`, `aircraft_not_available`, `aircraft_not_at_airport` or `aircraft_not_allowed` (another phpVMS refusal carries its message only); `422` with `free_flights_disabled`, `invalid_request` (a missing or malformed field), `unknown_departure_airport` or `unknown_arrival_airport`.
+
+### Filing
+
+`flights/complete` files a free flight like any other flight. For a PIREP with no flight attached (a free flight) it also accepts:
+
+- `arrival` (optional): the arrival airport flown to, replacing the one set at start, added as at start when the VA does not have it. One that cannot be added refuses the filing with `422` `unknown_arrival_airport` and nothing is saved, so smartCARS can file again with `XXXX`. Absent, null or empty keeps the PIREP's arrival; one of only spaces files to `XXXX`.
+- `flightNumber` (optional): replaces the PIREP's flight number when it is 1 to 10 characters after trimming. Any other value is ignored with a line in the site's log, and the filing goes on.
+
+### Placeholders
+
+The first free flight start creates the placeholders, and every start restores one that was deleted:
+
+- the airport `XXXX`, named `Unknown / off-field`, at 0, 0: the departure or arrival of a flight that did not start or end at an airport;
+- the aircraft `SC-FREE`, named `Unknown aircraft` (ICAO `ZZZZ`), in the subfleet `SCFREE` (`smartCARS free flights`) of the first airline: the aircraft of a flight flown in an aircraft that is not in the VA's fleet. An admin may move it into another subfleet; if that subfleet is deleted, it goes back to `SCFREE`.
+
+They stay when free flights are switched off, since PIREPs refer to them. `data/aircraft` never lists the placeholder aircraft, and `data/airports` never lists the placeholder airport.
 
 ## Pirep Distance Recalculation
 
@@ -293,7 +353,7 @@ For reports, filter on `landing_verified = 1` (or `takeoff_verified = 1`).
 
 ## Capabilities
 
-`GET /` also answers `capabilities`, the optional features this backend supports (today `flight-analyses`, `verified-analyses` (both on the two analyses routes; smartCARS does not read it today), `flight-events`, `arrival-search`, `flight-destinations`, `destination-routes` (`flights/destinations` also answers the routes of a search, see "Routes for a search"), `flight-phases` (`flights/update` accepts smartCARS 4's generic phase names `PRE_FLIGHT`, `TAXI_OUT`, `TAXI_IN` and `COMPLETE`, mapped like `BOARDING`, `TAXI`, `TAXI_TO_GATE` and `DEBOARDING`, next to smartCARS 3's names), `iata-flight-types` (clients sending a `smartCARS/<major>` User-Agent with major 4 or later get the phpVMS flight type letter as stored in the flight `type`; other clients get P or C), while the `pireps.handle_diversion` setting is enabled `divert`, and while auto-update is enabled `auto-update`). Each endpoint behind one also names it in the `X-SmartCARS-Capability` response header; `flight-phases` and `iata-flight-types` have no endpoint of their own and are named in that header on `GET /`. Both come from the `scCapability` default on the route, so a new capability is declared once, on its route.
+`GET /` also answers `capabilities`, the optional features this backend supports (today `flight-analyses`, `verified-analyses` (both on the two analyses routes; smartCARS does not read it today), `flight-events`, `arrival-search`, `flight-destinations`, `destination-routes` (`flights/destinations` also answers the routes of a search, see "Routes for a search"), `flight-phases` (`flights/update` accepts smartCARS 4's generic phase names `PRE_FLIGHT`, `TAXI_OUT`, `TAXI_IN` and `COMPLETE`, mapped like `BOARDING`, `TAXI`, `TAXI_TO_GATE` and `DEBOARDING`, next to smartCARS 3's names), `iata-flight-types` (clients sending a `smartCARS/<major>` User-Agent with major 4 or later get the phpVMS flight type letter as stored in the flight `type`; other clients get P or C), while the `pireps.handle_diversion` setting is enabled `divert`, while the `smartcars.free_flights` setting is enabled `free-flights` (`flights/free/start`, see "Free flights"), and while auto-update is enabled `auto-update`). Each endpoint behind one also names it in the `X-SmartCARS-Capability` response header; `flight-phases` and `iata-flight-types` have no endpoint of their own and are named in that header on `GET /`. Both come from the `scCapability` default on the route, so a new capability is declared once, on its route.
 
 ## Unchanged lists
 
@@ -307,27 +367,30 @@ Every flight of `GET /flights/bookings`, `GET /flights/search` and `POST /flight
 
 A refusal answers `{ "message": "...", "code": "..." }`. `message` is the reason, readable by the pilot, and keeps the same text as before. `code` is a stable code for the reason, so a client can say what happened and what to do next. It is optional: a reason the module has no code for (an unexpected phpVMS refusal, a server error) carries the message only.
 
-| Code                      | When                                                                                     | Routes in this module                                                                           |
-| ------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `aircraft_not_available`  | the aircraft is in use by another flight or not available                                | `flights/start`                                                                                 |
-| `aircraft_not_at_airport` | the aircraft is parked elsewhere                                                         | `flights/start`                                                                                 |
-| `aircraft_not_allowed`    | the pilot's rank or type ratings do not allow the aircraft                               | `flights/start`                                                                                 |
-| `pilot_not_at_airport`    | the pilot is not at the departure airport                                                | `flights/start`                                                                                 |
-| `no_aircraft`             | the booking has no aircraft and the VA needs one                                         | `flights/start`                                                                                 |
-| `flight_already_booked`   | the flight is already booked (by this pilot, or exclusively by someone else)             | `flights/book`                                                                                  |
-| `aircraft_already_booked` | another booking holds the aircraft                                                       | `flights/book`, `flights/charter`                                                               |
-| `booking_limit`           | the pilot has reached the VA's booking limit                                             | `flights/book`, `flights/charter`                                                               |
-| `booking_not_found`       | the booking does not exist (any more)                                                    | `flights/start`, `flights/rebook`, `flights/unbook`                                             |
-| `no_active_flight`        | the pilot has no such flight                                                             | `flights/update`, `flights/events`, `flights/divert`, `flights/complete`                        |
-| `flight_not_in_progress`  | the flight is already filed, cancelled or otherwise closed                               | `flights/events`, `flights/divert`, `flights/complete`                                          |
-| `flight_already_filed`    | the flight was filed already                                                             | `flights/cancel`                                                                                |
-| `diversion_disabled`      | the VA does not accept diversions                                                        | `flights/divert`                                                                                |
-| `unknown_airport`         | an airport the request names is not in the VA's data                                     | `flights/divert`, `flights/charter`                                                             |
-| `invalid_request`         | the request is malformed, or names a flight or an aircraft that does not exist           | `flights/book`, `flights/rebook`, `flights/charter`, `flights/events`, `flights/complete`, `flights/search`, `flights/search/arrivals` |
-| `pilot_pending`           | the pilot account is waiting for approval (`409`)                                        | `pilot/login`, `pilot/resume`, every authenticated route                                        |
-| `pilot_rejected`          | the pilot account was rejected (`403`)                                                   | `pilot/login`, `pilot/resume`, every authenticated route                                        |
-| `pilot_suspended`         | the pilot account is suspended, deleted or in any other state that is not active (`403`) | `pilot/login`, `pilot/resume`, every authenticated route (a deleted pilot: sign-in only)        |
-| `too_many_attempts`       | too many failed sign-ins for the account in the last minute (`429`)                      | `pilot/login`                                                                                   |
+| Code                        | When                                                                                                                                                       | Routes in this module                                                                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `aircraft_not_available`    | the aircraft is in use by another flight or not available (on `flights/free/start`, also an aircraft that does not exist or that another pilot has booked) | `flights/start`, `flights/free/start`                                                                                                                        |
+| `aircraft_not_at_airport`   | the aircraft is parked elsewhere                                                                                                                           | `flights/start`, `flights/free/start`                                                                                                                        |
+| `aircraft_not_allowed`      | the pilot's rank or type ratings do not allow the aircraft                                                                                                 | `flights/start`, `flights/free/start`                                                                                                                        |
+| `pilot_not_at_airport`      | the pilot is not at the departure airport                                                                                                                  | `flights/start`, `flights/free/start`                                                                                                                        |
+| `free_flights_disabled`     | the VA does not accept free flights                                                                                                                        | `flights/free/start`                                                                                                                                         |
+| `unknown_departure_airport` | the departure is not in the VA's data and phpVMS cannot add it                                                                                             | `flights/free/start`                                                                                                                                         |
+| `unknown_arrival_airport`   | the arrival is not in the VA's data and phpVMS cannot add it                                                                                               | `flights/free/start`, `flights/complete` (free flights)                                                                                                      |
+| `no_aircraft`               | the booking has no aircraft and the VA needs one                                                                                                           | `flights/start`                                                                                                                                              |
+| `flight_already_booked`     | the flight is already booked (by this pilot, or exclusively by someone else)                                                                               | `flights/book`                                                                                                                                               |
+| `aircraft_already_booked`   | another booking holds the aircraft                                                                                                                         | `flights/book`, `flights/charter`                                                                                                                            |
+| `booking_limit`             | the pilot has reached the VA's booking limit                                                                                                               | `flights/book`, `flights/charter`                                                                                                                            |
+| `booking_not_found`         | the booking does not exist (any more)                                                                                                                      | `flights/start`, `flights/rebook`, `flights/unbook`                                                                                                          |
+| `no_active_flight`          | the pilot has no such flight                                                                                                                               | `flights/update`, `flights/events`, `flights/divert`, `flights/complete`                                                                                     |
+| `flight_not_in_progress`    | the flight is already filed, cancelled or otherwise closed                                                                                                 | `flights/events`, `flights/divert`, `flights/complete`                                                                                                       |
+| `flight_already_filed`      | the flight was filed already                                                                                                                               | `flights/cancel`                                                                                                                                             |
+| `diversion_disabled`        | the VA does not accept diversions                                                                                                                          | `flights/divert`                                                                                                                                             |
+| `unknown_airport`           | an airport the request names is not in the VA's data                                                                                                       | `flights/divert`, `flights/charter`                                                                                                                          |
+| `invalid_request`           | the request is malformed, or names a flight or an aircraft that does not exist                                                                             | `flights/book`, `flights/rebook`, `flights/charter`, `flights/free/start`, `flights/events`, `flights/complete`, `flights/search`, `flights/search/arrivals` |
+| `pilot_pending`             | the pilot account is waiting for approval (`409`)                                                                                                          | `pilot/login`, `pilot/resume`, every authenticated route                                                                                                     |
+| `pilot_rejected`            | the pilot account was rejected (`403`)                                                                                                                     | `pilot/login`, `pilot/resume`, every authenticated route                                                                                                     |
+| `pilot_suspended`           | the pilot account is suspended, deleted or in any other state that is not active (`403`)                                                                   | `pilot/login`, `pilot/resume`, every authenticated route (a deleted pilot: sign-in only)                                                                     |
+| `too_many_attempts`         | too many failed sign-ins for the account in the last minute (`429`)                                                                                        | `pilot/login`                                                                                                                                                |
 
 The routes column says where this module sends each code; it is not a restriction. Any route may send any code, and a backend may send codes outside this list, so a client falls back to the message for a code it does not know.
 
@@ -358,6 +421,10 @@ Every distance the module sends is in nautical miles (`nmi`), whatever the VA's 
 - `maximumPassengers` and `maximumCargo`: the sums of the subfleet's passenger and cargo fare capacities (0 without fares).
 - `minimumRank`: the lowest rank level allowed on the subfleet, or `null` when no rank is set on it. Deprecated and still sent: `restriction` says whether the pilot may fly the aircraft.
 - `serviceCeiling`: always `null`, phpVMS has no such value.
+- `airport`: the ID of the airport where the aircraft is (phpVMS's aircraft location), or `null` when phpVMS has none.
+- `state`: phpVMS's aircraft state, `parked`, `in_use` or `in_air`. Only a parked aircraft can be started; a state phpVMS may add later is sent as `in_use`.
+
+The free-flight placeholder aircraft (`SC-FREE`, see "Free flights") is never listed.
 
 ## Pilot details and news
 
