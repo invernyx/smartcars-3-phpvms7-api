@@ -1602,7 +1602,7 @@
                         }
                     },
                     "503": {
-                        "description": "503 - Another free flight start of the same pilot held the start lock for longer than 30 seconds (code start_in_progress); nothing was created, the start can be sent again",
+                        "description": "503 - Another free flight start of the same pilot held the start lock past the database lock wait timeout (code start_in_progress); nothing was created, the start can be sent again",
                         "content": {
                             "application/json": {
                                 "schema": {

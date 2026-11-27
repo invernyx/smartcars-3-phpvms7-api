@@ -43,11 +43,9 @@ use App\Services\FlightService;
 use App\Services\PirepService;
 use App\Services\UserService;
 use Carbon\Carbon;
-use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\DetectsConcurrencyErrors;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -142,9 +140,6 @@ class FlightsController extends Controller
     // pireps.flight_number is a VARCHAR(10)
     private const FREE_FLIGHT_NUMBER_MAX_LENGTH = 10;
     private const INTEGER_INPUT_PATTERN = '/^-?\d+$/D';
-    private const FREE_START_LOCK_PREFIX = 'smartcars-free-start-';
-    private const FREE_START_LOCK_SECONDS = 60;
-    private const FREE_START_LOCK_WAIT_SECONDS = 30;
     // airports.id is a VARCHAR(8) since phpVMS 7.0.11: a longer ident would be cut into another airport's id
     private const AIRPORT_ID_MAX_LENGTH = 8;
 
@@ -1490,10 +1485,16 @@ class FlightsController extends Controller
             $attrs['level'] = $cruise;
         }
 
+        // A row lock on the pilot, not a cache lock: the cache store may be per worker (array) or per host (file)
         try {
-            return Cache::lock(self::FREE_START_LOCK_PREFIX.$user->id, self::FREE_START_LOCK_SECONDS)
-                ->block(self::FREE_START_LOCK_WAIT_SECONDS, fn () => $this->prefileFreeStart($user, $attrs, $aircraftId, $isPlaceholderAircraft));
-        } catch (LockTimeoutException $e) {
+            return DB::transaction(function () use ($user, $attrs, $aircraftId, $isPlaceholderAircraft) {
+                User::whereKey($user->id)->lockForUpdate()->first();
+                return $this->prefileFreeStart($user, $attrs, $aircraftId, $isPlaceholderAircraft);
+            });
+        } catch (\Throwable $e) {
+            if (!$this->causedByConcurrencyError($e)) {
+                throw $e;
+            }
             Log::warning('smartCARS: free flight start of user '.$user->id.' timed out waiting for the previous one');
             return $this->refusal('Another free flight start is still running', 'start_in_progress', 503);
         }
