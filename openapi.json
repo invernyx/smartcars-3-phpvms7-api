@@ -1495,7 +1495,7 @@
         "/flights/free/start": {
             "post": {
                 "summary": "Start Free Flight",
-                "description": "Start a free flight: a flight with no schedule and no booking, filed with /flights/complete as a PIREP for review like any other. The PIREP is created in progress with no flight, under the airline named by the SC3_CHARTER_AIRLINE_ID environment variable (else the first airline), with the charter passenger flight type and the ACARS source. The departure is required; a departure of XXXX and an absent, null or empty arrival file against the unknown airport XXXX (Unknown / off-field), which the module creates on first use. An airport the VA does not have is added through phpVMS's airport lookup only while the phpVMS \"general.allow_unadded_airports\" setting is on, and only for an ident of at most 8 characters. With the \"general.auto_airport_lookup\" setting on, an ident the lookup does not know is refused; with it off, phpVMS saves the airport with the ident as its name, at 0, 0. Without aircraftID the flight uses the placeholder aircraft SC-FREE, which phpVMS's aircraft rules (rank, type rating, state, location) do not apply to; the pilot location rule (\"pilots.only_flights_from_current\") still does. A fleet aircraft goes through phpVMS's own prefile checks, and is also refused while another pilot has booked it and the \"bids.block_aircraft\" setting is on. A start repeated for the same pilot, airline, flight number and airports within phpVMS's duplicate check time (\"pireps.duplicate_check_time\") gets the PIREP already created while it is in progress or paused; after that PIREP was filed, a new one is created, with the module running phpVMS's aircraft checks itself (an aircraft on another flight in progress is refused with aircraft_not_available). Fares are generated from the aircraft's subfleet fares with the VA's default load factors; a fare failure is logged and does not refuse the start. Only available when the \"smartcars.free_flights\" setting is on (capability free-flights).",
+                "description": "Start a free flight: a flight with no schedule and no booking, filed with /flights/complete as a PIREP for review like any other. The PIREP is created in progress with no flight, under the airline named by the SC3_CHARTER_AIRLINE_ID environment variable (else the first airline), with the charter passenger flight type and the ACARS source. The departure is required; a departure of XXXX and an absent, null or empty arrival file against the unknown airport XXXX (Unknown / off-field), which the module creates on first use. An airport the VA does not have is added through phpVMS's airport lookup only while the phpVMS \"general.allow_unadded_airports\" setting is on, and only for an ident of at most 8 characters. With the \"general.auto_airport_lookup\" setting on, an ident the lookup does not know is refused; with it off, phpVMS saves the airport with the ident as its name, at 0, 0. Without aircraftID the flight uses the placeholder aircraft SC-FREE, which phpVMS's aircraft rules (rank, type rating, state, location) do not apply to; the pilot location rule (\"pilots.only_flights_from_current\") still does. A fleet aircraft goes through phpVMS's own prefile checks, and is also refused while another pilot has booked it and the \"bids.block_aircraft\" setting is on. A start repeated for the same pilot, airline, flight number and airports within phpVMS's duplicate check time (\"pireps.duplicate_check_time\") gets the free flight PIREP already created while it is in progress or paused (a PIREP of a scheduled flight is never reused); the starts of one pilot run one after another, so concurrent repeats get the same PIREP; after that PIREP was filed, a new one is created, with the module running phpVMS's aircraft checks itself (an aircraft on another flight in progress is refused with aircraft_not_available). Fares are generated from the aircraft's subfleet fares with the VA's default load factors; a fare failure is logged and does not refuse the start. Only available when the \"smartcars.free_flights\" setting is on (capability free-flights).",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1522,8 +1522,11 @@
                                         "description": "Optional. The arrival airport ICAO code, case-insensitive; absent, null or empty for the unknown airport XXXX. It can be set at filing instead"
                                     },
                                     "aircraftID": {
-                                        "type": ["integer", "null"],
-                                        "format": "int32",
+                                        "anyOf": [
+                                            {"type": "integer", "format": "int32"},
+                                            {"type": "string", "pattern": "^-?[0-9]+$"},
+                                            {"type": "null"}
+                                        ],
                                         "description": "Optional. The aircraft ID (an integer or a string of digits) from /data/aircraft; absent or null for the placeholder aircraft SC-FREE"
                                     },
                                     "route": {
@@ -1534,8 +1537,10 @@
                                         "description": "Optional. The planned route as a list of waypoints, stored as the PIREP's route joined with spaces"
                                     },
                                     "cruise": {
-                                        "type": "integer",
-                                        "format": "int32",
+                                        "anyOf": [
+                                            {"type": "integer", "format": "int32"},
+                                            {"type": "string", "pattern": "^-?[0-9]+$"}
+                                        ],
                                         "description": "Optional. The planned cruise level in feet (an integer or a string of digits), stored as the PIREP's flight level when above 0"
                                     }
                                 }
@@ -1587,6 +1592,17 @@
                     },
                     "422": {
                         "description": "422 - Free flights are disabled for this VA (code free_flights_disabled); the body is malformed (code invalid_request); or the departure (code unknown_departure_airport) or arrival (code unknown_arrival_airport) is not in the VA's data and phpVMS cannot add it",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "503 - Another free flight start of the same pilot held the start lock for longer than 30 seconds (code start_in_progress); nothing was created, the start can be sent again",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1897,7 +1913,7 @@
                                         "description": "Optional. The simulator and its version, stored as the PIREP's Simulator field value"
                                     },
                                     "arrival": {
-                                        "type": "string",
+                                        "type": ["string", "null"],
                                         "description": "Optional, free flights only (a flight started with /flights/free/start). The arrival airport ICAO code, case-insensitive, replacing the one set at start; XXXX for the unknown airport. An airport the VA does not have is added as at /flights/free/start; one that cannot be added refuses the filing with 422 unknown_arrival_airport and nothing is saved. Absent, null or empty keeps the PIREP's arrival; one of only spaces files to XXXX"
                                     },
                                     "flightNumber": {
@@ -3490,8 +3506,7 @@
                         "description": "Why the signed-in pilot may not fly the aircraft, following phpVMS's rank and type rating aircraft restriction settings: rank (the pilot's rank does not allow its subfleet) or type_rating (a type rating is missing); null when the pilot may fly it. A client treats any other value, or none, as allowed"
                     },
                     "airport": {
-                        "type": "string",
-                        "nullable": true,
+                        "type": ["string", "null"],
                         "description": "The ID of the airport where the aircraft is (phpVMS's aircraft location), or null when phpVMS has none"
                     },
                     "state": {
