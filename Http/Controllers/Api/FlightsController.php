@@ -90,6 +90,8 @@ class FlightsController extends Controller
         Days::SUNDAY    => 'Sunday',
     ];
     private const USER_AGENT_VERSION_PATTERN = '#^smartCARS/(\d+)#';
+    // Bounded and restricted so the source name stays within pireps.source_name and safe to display
+    private const USER_AGENT_COMMENT_PATTERN = '#^smartCARS/\d+\S*\s+\(([A-Za-z0-9][A-Za-z0-9 ._-]{0,19})\)#';
     private const IATA_FLIGHT_TYPES_MIN_MAJOR = 4;
     private const SOURCE_NAME_PREFIX = 'smartCARS ';
     private const SOURCE_NAME_DEFAULT = 'smartCARS 3';
@@ -225,9 +227,17 @@ class FlightsController extends Controller
     private function sourceName(Request $request): string
     {
         $major = $this->clientMajorVersion($request);
-        return $major !== null && $major >= self::IATA_FLIGHT_TYPES_MIN_MAJOR
-            ? self::SOURCE_NAME_PREFIX.$major
-            : self::SOURCE_NAME_DEFAULT;
+        if ($major === null || $major < self::IATA_FLIGHT_TYPES_MIN_MAJOR) {
+            return self::SOURCE_NAME_DEFAULT;
+        }
+        $comment = $this->clientComment($request);
+        return self::SOURCE_NAME_PREFIX.$major.($comment === null ? '' : ' ('.$comment.')');
+    }
+    private function clientComment(Request $request): ?string
+    {
+        return preg_match(self::USER_AGENT_COMMENT_PATTERN, (string) $request->userAgent(), $matches) === 1
+            ? rtrim($matches[1])
+            : null;
     }
     private function acarsSource(Request $request): string
     {

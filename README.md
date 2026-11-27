@@ -62,6 +62,7 @@ Version 2.0.2 adds free flights: a pilot can fly and file a flight with no sched
 - The refusal codes `free_flights_disabled`, `unknown_departure_airport`, `unknown_arrival_airport` and `start_in_progress`. See "Error codes".
 - `data/aircraft` sends each aircraft's `airport` (where phpVMS has it) and `state` (`parked`, `in_use` or `in_air`), and leaves out the placeholder aircraft. See "Aircraft list".
 - `data/airports` leaves out the placeholder airport `XXXX`, so smartCARS never offers it as an airport to pick. See "Free flights".
+- A client whose `smartCARS/<version>` User-Agent is followed by a comment in parentheses (`smartCARS/<version> (<comment>)`) and that gets a versioned source name has its PIREPs filed as `smartCARS <major> (<comment>)`. The comment is used only when it is 1 to 20 letters, digits, spaces, dots, dashes or underscores, starting with a letter or digit; otherwise the source name stays `smartCARS <major>`. ACARS rows keep their source.
 
 ### 2.0.1
 
