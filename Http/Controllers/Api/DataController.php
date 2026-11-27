@@ -13,6 +13,7 @@ use App\Models\Subfleet;
 use App\Services\FareService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
+use Modules\SmartCARS3phpVMS7Api\Support\FreeFlightPlaceholders;
 use Modules\SmartCARS3phpVMS7Api\Support\RankLevel;
 use Modules\SmartCARS3phpVMS7Api\Support\ScSettings;
 
@@ -22,6 +23,14 @@ use Modules\SmartCARS3phpVMS7Api\Support\ScSettings;
  */
 class DataController extends Controller
 {
+    private const AIRCRAFT_STATES = [
+        AircraftState::PARKED => 'parked',
+        AircraftState::IN_USE => 'in_use',
+        AircraftState::IN_AIR => 'in_air',
+    ];
+    // Only a parked aircraft can be prefiled, so a state phpVMS may add later reads as unavailable
+    private const AIRCRAFT_STATE_UNKNOWN = 'in_use';
+
     private function jsonWithEtag(Request $request, $payload)
     {
         $response = response()->json($payload);
@@ -85,19 +94,12 @@ class DataController extends Controller
         [$restrictRank, $restrictType, $rankSubfleetIds, $allowedSubfleetIds] = $this->restrictionsFor($request->user());
         $subfleets = $this->subfleetValues($aircraft->pluck('subfleet_id')->filter()->unique()->values()->all());
         $output = [];
+        $placeholderAircraftId = FreeFlightPlaceholders::existingAircraftId();
         foreach ($aircraft as $item) {
-            $state = "";
-            switch ($item->state) {
-                case AircraftState::PARKED:
-                    $state = "Available";
-                    break;
-                case AircraftState::IN_USE:
-                    $state = "In Use";
-                    break;
-                case AircraftState::IN_AIR:
-                    $state = "In Air";
-                    break;
+            if ((int) $item->id === $placeholderAircraftId) {
+                continue;
             }
+            $state = self::AIRCRAFT_STATES[$item->state] ?? self::AIRCRAFT_STATE_UNKNOWN;
             $subfleet = $subfleets[$item->subfleet_id] ?? null;
             $restriction = null;
             if (!in_array($item->subfleet_id, $allowedSubfleetIds, true)) {
@@ -114,14 +116,17 @@ class DataController extends Controller
                 "maximumPassengers" => $subfleet['maximumPassengers'] ?? 0,
                 "maximumCargo" => $subfleet['maximumCargo'] ?? 0,
                 "minimumRank" => $subfleet['minimumRank'] ?? null,
-                "restriction" => $restriction
+                "restriction" => $restriction,
+                "airport" => $item->airport_id,
+                "state" => $state
             ];
         }
         return $this->jsonWithEtag($request, $output);
     }
     public function airports(Request $request)
     {
-        $airports = Airport::withTrashed()->get()->map(function($apt) {
+        // The placeholder airport is no place to pick: it sits at 0, 0 and only stands for an unknown one
+        $airports = Airport::withTrashed()->where('id', '!=', FreeFlightPlaceholders::AIRPORT_ID)->get()->map(function($apt) {
             return [
                 'id' => $apt->id,
                 'code' => $apt->icao,

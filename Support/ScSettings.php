@@ -14,6 +14,7 @@ class ScSettings
     public const AIRLINE_CODE = 'smartcars.airline_code';
     public const AIRCRAFT_NAME = 'smartcars.aircraft_name';
     public const CANCEL_MODE = 'smartcars.cancel_mode';
+    public const FREE_FLIGHTS = 'smartcars.free_flights';
 
     public const AIRLINE_CODE_IATA = 'iata';
     public const AIRLINE_CODE_ICAO = 'icao';
@@ -43,5 +44,10 @@ class ScSettings
     public static function isCancelDelete(): bool
     {
         return setting(self::CANCEL_MODE, self::CANCEL_MODE_CANCEL) === self::CANCEL_MODE_DELETE;
+    }
+
+    public static function areFreeFlightsOn(): bool
+    {
+        return (bool) setting(self::FREE_FLIGHTS, false);
     }
 }
