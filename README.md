@@ -45,6 +45,14 @@ This URL will be the "Script URL" option in smartCARS Central when managing your
 
 ## Changelog
 
+### 2.0.3
+
+Version 2.0.3 names the client more precisely in the PIREP source. A smartCARS client needs no change: every request and answer stays as it was. Replace the module folder; there is no migration to run.
+
+**Changed**
+
+- A client whose `smartCARS/<version>` User-Agent is followed by a comment in parentheses (`smartCARS/<version> (<comment>)`) and that gets a versioned source name has its PIREPs filed as `smartCARS <major> (<comment>)`. The comment is used only when it is 1 to 20 letters, digits, spaces, dots, dashes or underscores, starting with a letter or digit; otherwise the source name stays `smartCARS <major>`. ACARS rows keep their source.
+
 ### 2.0.2
 
 Version 2.0.2 adds free flights: a pilot can fly and file a flight with no schedule and no booking, which the VA reviews as any other PIREP. Free flights are off until the VA switches them on. A smartCARS client that does not use them needs no change: apart from the two new fields of `data/aircraft`, the placeholder aircraft left out of it and the placeholder airport left out of `data/airports`, every request and answer stays as it was. Reviewed against the phpVMS 7.0.11 sources.
@@ -62,7 +70,6 @@ Version 2.0.2 adds free flights: a pilot can fly and file a flight with no sched
 - The refusal codes `free_flights_disabled`, `unknown_departure_airport`, `unknown_arrival_airport` and `start_in_progress`. See "Error codes".
 - `data/aircraft` sends each aircraft's `airport` (where phpVMS has it) and `state` (`parked`, `in_use` or `in_air`), and leaves out the placeholder aircraft. See "Aircraft list".
 - `data/airports` leaves out the placeholder airport `XXXX`, so smartCARS never offers it as an airport to pick. See "Free flights".
-- A client whose `smartCARS/<version>` User-Agent is followed by a comment in parentheses (`smartCARS/<version> (<comment>)`) and that gets a versioned source name has its PIREPs filed as `smartCARS <major> (<comment>)`. The comment is used only when it is 1 to 20 letters, digits, spaces, dots, dashes or underscores, starting with a letter or digit; otherwise the source name stays `smartCARS <major>`. ACARS rows keep their source.
 
 ### 2.0.1
 
