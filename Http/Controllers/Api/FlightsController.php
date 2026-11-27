@@ -1527,6 +1527,7 @@ class FlightsController extends Controller
             Log::warning($e->getMessage());
             return $this->exceptionRefusal($e, 409);
         } catch (\Throwable $e) {
+            $this->rethrowConcurrencyError($e);
             Log::error($e);
             return response()->json(['message' => $e->getMessage()], 500);
         }
@@ -1534,6 +1535,7 @@ class FlightsController extends Controller
         try {
             $this->generateFares(Aircraft::find($aircraftId), null, $pirep);
         } catch (\Throwable $e) {
+            $this->rethrowConcurrencyError($e);
             Log::error('smartCARS: could not generate the fares of free flight PIREP '.$pirep->id.': '.$e->getMessage());
         }
         return response()->json(['trackingID' => $pirep->id]);
